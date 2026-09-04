@@ -9,6 +9,14 @@
   "bin": {
     "cnb2api-quota": "bin/cnb2api-quota.mjs"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dengyie/cnb2api.git"
+  },
+  "homepage": "https://github.com/dengyie/cnb2api#readme",
+  "bugs": {
+    "url": "https://github.com/dengyie/cnb2api/issues"
+  },
   "scripts": {
     "start": "node src/server.mjs",
     "quota": "node bin/cnb2api-quota.mjs",
