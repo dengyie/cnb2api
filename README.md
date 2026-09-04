@@ -15,7 +15,8 @@ English · [简体中文](README.zh-CN.md)
 
 Turn a [CNB](https://cnb.cool) cloud-workspace **in-network AI endpoint** into a
 standard **OpenAI-compatible** API — 100% in the cloud, zero local dependencies,
-with a self-healing fixed public address.
+with a self-healing fixed public address. No reverse engineering, no anonymous
+endpoints: this is the on-the-books way to use your credits.
 
 CNB's built-in AI credits are only reachable from inside a CNB cloud workspace
 (the endpoint requires a pipeline `CNB_TOKEN` and CNB-internal networking). This
@@ -24,6 +25,12 @@ plain `https://.../v1/chat/completions` endpoint you can point any OpenAI client
 
 > Node 22+ · **zero npm dependencies** (native `fetch` / `AbortSignal` / streams) ·
 > tests use the built-in `node:test` runner.
+
+> [!NOTE]
+> **Above-board by design.** cnb2api talks only to the **official workspace AI
+> endpoint** with the pipeline `CNB_TOKEN` CNB itself issues — no
+> reverse-engineered front-end endpoints, no anonymous session scraping, and
+> nothing that conflicts with the platform's community rules.
 
 ## Why cnb2api?
 
@@ -35,17 +42,24 @@ the workspace:
 | The AI endpoint answers only on CNB-internal networking | a tiny reverse proxy runs **inside** the workspace and relays it |
 | `CNB_TOKEN` is minted per pipeline run and can't be stored | a keepalive cron mints a fresh token on every run; your secrets stay in a private repo |
 | The workspace subdomain changes on every restart | the workspace self-registers on boot; your fixed domain follows automatically |
+| Gray-area mirrors of CNB's AI break on every platform change, and native tool calls get 403'd | we use the **documented, official endpoint** — no front-end reverse engineering, full `tools` support, nothing to break when the UI changes |
 
 The result is one stable `https://…/v1` URL that works from anywhere — your
-laptop, CI, or any hosted app.
+laptop, CI, or any hosted app. And because it's your own org's endpoint with
+your own credits, it stays within the platform's terms of service.
 
 ## Features
 
+- **Above-board**: only the **official, documented workspace AI endpoint** with
+  the pipeline `CNB_TOKEN` — no reverse-engineered front-end endpoints, no
+  anonymous session pools, no community-rule gray areas. Your credits, your
+  org, on the record.
 - **OpenAI-compatible**: `/v1/chat/completions` (streaming SSE + non-streaming),
   `/v1/models`, `/health`.
-- **Quota dashboard in your terminal**: one command shows AI credits and
-  core-hours with traffic-light progress bars — know what's left before it runs
-  out. Ships as `cnb2api-quota` / `npm run quota`, still zero dependencies.
+- **Quota dashboard in your terminal — the only one in the CNB ecosystem**:
+  one command shows AI credits and core-hours with traffic-light progress
+  bars — know what's left before it runs out. Ships as `cnb2api-quota` /
+  `npm run quota`, still zero dependencies.
 - **Faithful non-stream aggregation**: reassembles `content`, incremental
   `tool_calls`, `reasoning_content`, `usage`, and `finish_reason` from the
   upstream SSE stream into a complete `chat.completion` object.
@@ -193,6 +207,16 @@ curl http://127.0.0.1:9001/v1/chat/completions \
 
 ## FAQ
 
+**How is this different from the anonymous CNB proxies on GitHub?**
+Fundamentally. Those wrap the front-end NPC chat endpoint that
+[CNB](https://cnb.cool) exposes for anonymous web visitors: they scrape CSRF
+tokens, rotate session pools, and re-derive the protocol whenever the site
+changes — fragile, account-free, and clearly not what the platform intends.
+cnb2api uses the **official workspace AI endpoint** instead: documented path,
+your org's credits, full `tools` support, and a usage trail on your own
+account. It costs your allowance rather than someone else's patience — and it
+stays working.
+
 **Is it really zero dependencies?**
 Yes. Runtime and tests use Node 22 built-ins only — there is nothing to
 `npm install`, and nothing in `node_modules` to audit.
@@ -214,6 +238,11 @@ at build time via `imports:`. No long-lived CNB token is ever written to disk.
 **Does it work with Anthropic-format clients?**
 Not directly — this is an OpenAI-compatible shim. Use a client that speaks
 OpenAI format (most chat UIs and agents do).
+
+**Do native tool calls work?**
+Yes. Requests go through the official endpoint with your pipeline token, so
+`tools` / `tool_calls` are passed through untouched — no prompt-injection
+workarounds needed.
 
 **Is this affiliated with CNB?**
 No. Independent, personal-use project — see the note under
