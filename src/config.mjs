@@ -9,7 +9,7 @@ export const config = {
   upstreamToken: process.env.CNB_TOKEN || '',
   // Model ids advertised on /v1/models. Actual routing is done by the CNB gateway;
   // set PROXY_MODELS to whatever your account exposes.
-  models: (process.env.PROXY_MODELS || 'model-a,model-b,model-c').split(',').map((s) => s.trim()).filter(Boolean),
+  models: (process.env.PROXY_MODELS || 'deepseek-v4-flash,glm-5.3-flash,kimi-k3,deepseek-chat').split(',').map((s) => s.trim()).filter(Boolean),
   maxBodyBytes: 4 * 1024 * 1024,
   upstreamTimeoutMs: Number(process.env.PROXY_UPSTREAM_TIMEOUT_MS || 15_000), // connect + first byte
   idleTimeoutMs: Number(process.env.PROXY_IDLE_TIMEOUT_MS || 300_000),        // per-stream idle cap (reset each chunk)

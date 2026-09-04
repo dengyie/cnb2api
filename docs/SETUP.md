@@ -12,15 +12,14 @@ Time budget: ~10 minutes if you already have a CNB account with AI credits.
   (the "天才程序员" / built-in AI offering). Without it the upstream endpoint
   `https://api.cnb.cool/<org>/<repo>/-/ai/chat/completions` returns errors.
 - Know which models your account exposes. Set `PROXY_MODELS` to that list —
-  the repo default is a placeholder (`model-a,model-b,model-c`) and requests
-  naming an unavailable model will be rejected upstream.
+  the repo default is `deepseek-v4-flash,glm-5.3-flash,kimi-k3,deepseek-chat`
+  and requests naming an unavailable model will be rejected upstream.
 
-**Quota expectations**: a workspace pinned at `runner.cpus: 2` consumes roughly
-48 core-hours/day when kept alive around the clock, plus one small cron pipeline
-run every 5 minutes. CNB's free tier (~1600 core-hours/month) covers roughly
-three weeks of continuous uptime; shrink `runner.cpus` or accept nightly
-recycling if that matters to you. Watch usage under
-*org → settings → usage*.
+**Quota & Compute Economics**:
+- **Compute**: A workspace pinned at `runner.cpus: 2` burns `48 core-hours/day`. Running 24/7 across a 30-day month uses `1,440 core-hours`, safely within CNB's free `1,600 core-hours/month` allowance (giving **33.3 days of continuous uptime** with a 160h buffer).
+- **AI Credits**: 500 free credits on registration + 666 credits for "Genius Programmer" = **1,166 credits/month** (translating to **300M ~ 1B+ tokens/month** on flash models).
+- **Keepalive overhead**: The 5-min cron pipeline consumes only ~18–20 core-hours/month in total.
+Watch usage under *org → settings → usage*.
 
 ## 1. Create the code repo
 
