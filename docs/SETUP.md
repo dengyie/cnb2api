@@ -11,6 +11,12 @@ Time budget: ~5 minutes on the fast path, ~10 with the secrets repo.
 For a private fork, the only value you must supply is your own `PROXY_KEY` —
 the keepalive needs no edits because it reads the built-in `CNB_REPO_SLUG`:
 
+> **Two gotchas before you start:** the keepalive cron lives under the
+> `main:` branch key — if your repo's default branch isn't `main`, rename the
+> key or the branch or the cron never fires. And `env:` overrides `imports:`,
+> so when you later switch to the secrets-repo flow you must delete the
+> inline `env:` block, not just uncomment `imports:`.
+
 1. **Fork this repo into your org, private** (or create a private repo and
    push the contents). A private fork keeps your key inlined in `.cnb.yml`
    safely — it's your own repo.

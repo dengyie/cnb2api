@@ -81,7 +81,10 @@ $:
     - docker:
         image: cnbcool/default-dev-env:latest
       # Fastest path (private fork): inline your key here — safe in your own
-      # private repo. Cleaner path: delete the env line and use imports: instead.
+      # private repo. Generate one with `openssl rand -hex 24`; do NOT ship the
+      # placeholder. Cleaner path: DELETE this whole env: block (both lines) and
+      # uncomment imports: below — env overrides imports, so a leftover inline
+      # PROXY_KEY would silently shadow the one from your secrets repo.
       env:
         PROXY_KEY: "sk-set-your-own-long-random-key"
       # imports:
