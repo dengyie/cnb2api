@@ -36,6 +36,7 @@ function readBody(req, maxBytes) {
 const server = http.createServer(async (req, res) => {
   const reqId = newReqId();
   const started = Date.now();
+  const pathname = req.url.split('?')[0];
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -43,22 +44,25 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'OPTIONS') return send(res, 204, '');
 
-    if (req.url === '/health') {
-      return send(res, 200, { status: 'ok', uptime_sec: Math.round(process.uptime()), upstream_repo: config.repo });
+    if (pathname === '/health') {
+      // No repo identity here: /health is unauthenticated by design (probing),
+      // so it must leak nothing about where the proxy lives.
+      return send(res, 200, { status: 'ok', uptime_sec: Math.round(process.uptime()) });
     }
 
-    if (req.url === '/v1/models' || req.url === '/models') {
-      // 模型列表需要鉴权（key 不对同样计失败）；health 保持免鉴权供探测
+    if (pathname === '/v1/models' || pathname === '/models') {
+      // Model listing requires auth (a wrong key counts as a failure too);
+      // health stays unauthenticated for probing.
       const auth = checkAuth(req);
       if (!auth.ok) {
-        log.warn(reqId, 'auth failed', { status: auth.status, path: req.url });
+        log.warn(reqId, 'auth failed', { status: auth.status, path: pathname });
         const h = auth.retryAfterSec ? { 'Retry-After': String(auth.retryAfterSec) } : {};
         return send(res, auth.status, auth.body, h);
       }
       return send(res, 200, { object: 'list', data: config.models.map((id) => ({ id, object: 'model', owned_by: 'cnb' })) });
     }
 
-    if (req.method === 'POST' && req.url.split('?')[0].endsWith('/chat/completions')) {
+    if (req.method === 'POST' && pathname.endsWith('/chat/completions')) {
       const auth = checkAuth(req);
       if (!auth.ok) {
         log.warn(reqId, 'auth failed', { status: auth.status });

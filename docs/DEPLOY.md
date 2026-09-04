@@ -19,6 +19,18 @@ Replace every placeholder below with your own values:
    the map variable, and exposes `/ops/register` to the local service.
 3. **systemd** — keeps `cnb-register.py` running.
 
+## Domain, DNS and TLS
+
+1. Point an `A`/`AAAA` record for `ai.example.com` at the VPS. If you front it
+   with a CDN (e.g. Cloudflare proxying on), use an Origin certificate — below.
+2. TLS certificate, either of:
+   - **Cloudflare Origin certificate** (recommended when proxying through
+     Cloudflare): create it in the Cloudflare dashboard, install the two PEM
+     files under `/etc/nginx/ssl/`, set SSL mode to *Full (strict)*.
+   - **Let's Encrypt**: `sudo apt install certbot python3-certbot-nginx &&
+     sudo certbot --nginx -d ai.example.com`, then drop the manual
+     `ssl_certificate` lines (certbot manages them).
+
 ## 1. The register service
 
 Install the script and its token file:
@@ -62,13 +74,18 @@ sudo systemctl enable --now cnb-register
 ## 2. nginx
 
 The upstream target lives in its own file so the register service can rewrite it
-atomically. Seed it once (any value; it gets replaced on first registration):
+atomically. Seed it once (any value; it gets replaced on first registration —
+and `cnb-register.py` also creates this file on demand if it's ever missing):
 
 `/etc/nginx/conf.d/cnb-ai-upstream.conf`:
 
 ```nginx
 map $request_uri $cnb_ai_upstream { default placeholder-9001.cnb.run:443; }
 ```
+
+> Seed this file **before** enabling the vhost below: the vhost references
+> `$cnb_ai_upstream`, and `nginx -t` fails with "unknown variable" while the
+> map file is absent.
 
 Virtual host `/etc/nginx/sites-available/ai.example.com` (adjust TLS + domain):
 
@@ -83,11 +100,19 @@ server {
     listen 443 ssl http2;
     server_name ai.example.com;
 
+    # Must cover the proxy's own body cap (4 MiB); nginx defaults to 1 MiB,
+    # which would reject long-context requests here with a bare nginx 413
+    # before they ever reach the proxy.
+    client_max_body_size 8m;
+
     ssl_certificate     /etc/nginx/ssl/your.crt;
     ssl_certificate_key /etc/nginx/ssl/your.key;
     ssl_protocols TLSv1.2 TLSv1.3;
 
     # Self-registration endpoint (workspace -> relay). Local only.
+    # Optional hardening: rate-limit token guessing with
+    #   limit_req_zone $binary_remote_addr zone=reg:10m rate=30r/m;  (http level)
+    #   limit_req zone=reg burst=10 nodelay;                          (here)
     location = /ops/register {
         proxy_pass http://127.0.0.1:9003/register;
     }

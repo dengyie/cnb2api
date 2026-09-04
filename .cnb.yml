@@ -15,8 +15,10 @@
 # ---------------------------------------------------------------------------
 # Keepalive: ensure the vscode workspace is alive and reachable via the fixed
 # domain. Uses the pipeline's temporary CNB_TOKEN (auto-issued per run).
-# Replace YOUR_ORG/ai-proxy with your org/repo, and FIXED with your fixed
-# domain health URL (or drop FIXED checks to rely on list/status only).
+# This block lives under the `main:` branch key — if your default branch is
+# not `main`, rename the key (or your branch) or the cron never fires.
+# Set REPO to your org/repo; uncomment FIXED with your fixed-domain health URL
+# to enable the HTTP probe + fake-death recovery (unset = status checks only).
 # ---------------------------------------------------------------------------
 main:
   "crontab: */5 * * * *":
@@ -27,7 +29,7 @@ main:
       #   - https://cnb.cool/YOUR_ORG/your-secrets-repo/-/blob/main/proxy.yml
       env:
         REPO: YOUR_ORG/ai-proxy
-        FIXED: ""   # e.g. https://ai.example.com/health ; empty skips the HTTP probe
+        #FIXED: https://ai.example.com/health
       stages:
         - name: ensure-workspace
           script: |
@@ -90,5 +92,4 @@ $:
         - name: start-ai-proxy
           script: |
             set -euo pipefail
-            export REGISTER_URL="${REGISTER_URL:-}"
             bash "$(pwd)/deploy/start.sh"

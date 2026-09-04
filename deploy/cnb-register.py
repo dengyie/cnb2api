@@ -36,19 +36,30 @@ URI_RE = re.compile(r'^https://([a-z0-9]+)-\{\{port\}\}\.cnb\.run$')
 
 def switch(sub):
     new = "map $request_uri $cnb_ai_upstream { default %s-%s.cnb.run:443; }\n" % (sub, UPSTREAM_PORT)
-    cur = open(CONF).read()
+    try:
+        cur = open(CONF).read()
+    except OSError:
+        # First registration before the map file was seeded: start from an empty
+        # baseline. nginx -t below still gates the reload.
+        cur = ''
     if cur == new:
         return {'ok': True, 'switched': False, 'sub': sub}
-    open(CONF + '.regbak', 'w').write(cur)
-    open(CONF, 'w').write(new)
-    t = subprocess.run(['nginx', '-t'], capture_output=True, text=True)
-    if t.returncode != 0:
-        open(CONF, 'w').write(cur)
-        return {'ok': False, 'error': 'nginx -t failed, rolled back', 'detail': t.stderr[-300:]}
-    r = subprocess.run(['systemctl', 'reload', 'nginx'], capture_output=True, text=True)
-    if r.returncode != 0:
-        open(CONF, 'w').write(cur)
-        return {'ok': False, 'error': 'reload failed, rolled back', 'detail': r.stderr[-300:]}
+    try:
+        open(CONF + '.regbak', 'w').write(cur)
+        tmp = CONF + '.tmp'
+        with open(tmp, 'w') as f:
+            f.write(new)
+        os.replace(tmp, CONF)  # atomic: readers never see a half-written map
+        t = subprocess.run(['nginx', '-t'], capture_output=True, text=True)
+        if t.returncode != 0:
+            open(CONF, 'w').write(cur)
+            return {'ok': False, 'error': 'nginx -t failed, rolled back', 'detail': t.stderr[-300:]}
+        r = subprocess.run(['systemctl', 'reload', 'nginx'], capture_output=True, text=True)
+        if r.returncode != 0:
+            open(CONF, 'w').write(cur)
+            return {'ok': False, 'error': 'reload failed, rolled back', 'detail': r.stderr[-300:]}
+    except OSError as e:
+        return {'ok': False, 'error': 'conf write failed', 'detail': str(e)[:200]}
     return {'ok': True, 'switched': True, 'sub': sub}
 
 

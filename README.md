@@ -78,16 +78,19 @@ curl http://127.0.0.1:9001/v1/chat/completions \
 
 ## Deploy on CNB
 
-1. Fork/create a CNB repo from this project.
-2. Put your secrets (`PROXY_KEY`, `REG_TOKEN`, `REGISTER_URL`) in a **private**
-   secrets repo and reference it from `.cnb.yml` via `imports:` — do **not**
-   commit real values.
-3. Edit `.cnb.yml`: set `REPO` to your `org/repo` and (optionally) `FIXED` /
-   `REGISTER_URL`.
-4. Push, then start the cloud workspace. The build log prints `PROXY_URI=...`.
-5. To get one stable public URL, deploy the relay + nginx from
-   [docs/DEPLOY.md](docs/DEPLOY.md). Without it you can still use the raw
-   `https://<subdomain>-9001.cnb.run/v1` URL (it changes on each restart).
+**Start here: [docs/SETUP.md](docs/SETUP.md)** — a from-zero walkthrough
+(code repo → secrets repo with `allow_slugs` → `.cnb.yml` edits → workspace
+boot → end-to-end verification, plus a troubleshooting table).
+
+Prerequisites in one line: a CNB account whose org has AI credits enabled and
+knowledge of your model names (`PROXY_MODELS`). Quota expectations: a 2-cpu
+always-on workspace ≈ 48 core-hours/day against CNB's free ~1600 core-hours/month.
+
+For the optional fixed public domain (`https://ai.example.com/v1`) that follows
+workspace restarts automatically, deploy the nginx relay described in
+[docs/DEPLOY.md](docs/DEPLOY.md). Without it, use the raw
+`https://<subdomain>-9001.cnb.run/v1` URL printed in the build log (it changes
+on each workspace restart).
 
 See [`.env.example`](.env.example) for every knob.
 

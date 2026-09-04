@@ -29,7 +29,8 @@ for i in $(seq 1 20); do
     echo "===== proxy self-check: health OK ====="
     curl -s --max-time 2 "http://127.0.0.1:${PORT}/health"; echo
     echo "===== models ====="
-    curl -s --max-time 2 "http://127.0.0.1:${PORT}/v1/models"; echo
+    # /v1/models requires auth; send the key so this check proves routing end to end
+    curl -s --max-time 2 -H "Authorization: Bearer ${PROXY_KEY}" "http://127.0.0.1:${PORT}/v1/models"; echo
     echo "PROXY_URI=${CNB_VSCODE_PROXY_URI:-<env missing>}"
     # Self-registration: report this workspace's port-proxy URI to the fixed-domain
     # relay. Failure is non-fatal for the proxy itself (the relay-side monitor will
