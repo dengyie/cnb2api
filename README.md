@@ -156,10 +156,14 @@ exact rather than estimated. From live measurements against `deepseek-v4-flash`:
 - Identical prompts hit CNB's prompt cache and drop to **~0.01 credit** — over
   30× cheaper on the cached portion (`prompt_cache_hit_tokens` in `usage`).
 
-At ~23k tokens/credit, 1,166 credits is on the order of **20M+ tokens/month** of
-fresh traffic, and far more once caching kicks in. Rather than trust that figure,
-watch your real burn with the built-in quota CLI below — the `credit` per request
-is reported by the upstream itself.
+At ~23k tokens/credit, 1,166 credits covers **20M+ tokens/month** of fresh
+traffic. Cached prompts cost only ~1/30 of full price, so the blended rate
+depends on your cache-hit rate: at a **90% hit rate** (fixed system prompts,
+agent loops re-reading the same context) the average cost is
+`10% × 1 + 90% × 1/30 ≈ 13%` of full price — roughly **~177k tokens per
+credit**, or about **200M tokens/month** on 1,166 credits. Rather than trust
+any single figure, watch your real burn with the built-in quota CLI below —
+the `credit` per request is reported by the upstream itself.
 
 ### Compute: enough to stay up 24/7
 

@@ -141,9 +141,12 @@ Keepalive(见 [docs/DESIGN.md](docs/DESIGN.md)):定时流水线保证工作区�
 - 相同 prompt 会命中 CNB 的 prompt 缓存,降到 **~0.01 credit**——缓存部分
   便宜 30 倍以上(`usage` 里的 `prompt_cache_hit_tokens` 可见)。
 
-按 ~23k tokens/credit 算,1,166 credits 大约够 **2,000 万+ tokens/月** 的
-全新流量,缓存命中后还能更多。别只信这个数——用下面的额度 CLI 盯你自己的
-真实消耗,每个请求的 `credit` 是上游自己报的。
+按 ~23k tokens/credit 算,1,166 credits 够 **2,000 万+ tokens/月** 的全新
+流量。缓存命中的 prompt 只收 ~1/30 的钱,综合单价取决于你的缓存命中率:按
+**90% 命中率**(固定 system prompt、Agent 循环反复读同一段上下文的典型场景)
+算,平均成本是 `10% × 1 + 90% × 1/30 ≈ 13%`——约 **17.7 万 tokens/credit**,
+1,166 credits 约合 **2 亿 tokens/月**。别只信单一数字——用下面的额度 CLI 盯
+你自己的真实消耗,每个请求的 `credit` 是上游自己报的。
 
 ### 算力:足以 7×24 在线
 
