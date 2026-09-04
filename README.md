@@ -128,49 +128,77 @@ its subdomain to the relay on boot; the relay only follows the current address.
 `ai.example.com`, `<org>/<repo>`, port `9001` above are **placeholders** — set them
 to your own values.
 
-## The Economics: What You Actually Get (Real-world Data)
+## What you actually get
 
-Most developer platforms advertise "free tiers" that vanish after two days of testing.
-Based on our real-world continuous deployment and production accounting, here is
-the exact breakdown of what CNB provides and how far it stretches:
+Two independent free allowances power this setup: **AI credits** for inference and
+**core-hours** for the compute the proxy runs on. Numbers below come from our own
+running deployment — measured, not marketing.
 
-### Monthly Quota Breakdown
+### The two quotas
 
-| Resource | Monthly Quota | Equivalent Real-world Value | Real Uptime & Capacity |
-|---|---|---|---|
-| **AI Credits** | **500 ~ 1,166 credits** | ¥500 ~ ¥1,166 of direct model API spend | **300M ~ 1B+ Tokens** on flash models (see below) |
-| **Dev Core-Hours** | **1,600 core-hours** (5,760,000s) | A dedicated 2-vCPU cloud container running 24/7 | **33.3 days** of non-stop execution (outlasts a 30-day month) |
-| **CI Core-Hours** | **160 ~ 1,600 core-hours** | Automated testing & keepalive pipelines | **~18–20 core-hours/month** used by the 5-min cron |
+| Resource | Free monthly quota | What it pays for |
+|---|---|---|
+| **AI credits** | **500** base, up to **1,166** with the *hello-cnb* bonus | Every AI request; each response's `usage` reports the `credit` it cost |
+| **Compute core-hours** | **1,600 core-hours** (shared dev + CI pool) | The workspace running the proxy, plus the keepalive pipeline |
 
-> **How to get 1,166 Credits**: 500 credits are granted to every verified org upon registration.
-> Another 666 credits/month are awarded automatically upon completing the official
-> *hello-cnb* onboarding challenge ("Genius Programmer" badge). Both quotas renew monthly.
+> The 500 base credits come with a verified org. Completing CNB's official
+> *hello-cnb* onboarding ("Genius Programmer" badge) adds a recurring monthly
+> bonus, bringing our account to 1,166/month. Your total depends on your own
+> account status.
 
-### Capacity & Token Economics
+### Credits: measured token cost
 
-- **33.3 Days of 2-vCPU Uptime**: A default `runner.cpus: 2` workspace burns `2 × 24 = 48` core-hours per day. Running 24/7 for a full 30-day month consumes `1,440` core-hours, leaving a comfortable **160 core-hour safety buffer**. You never need to shut down the proxy to conserve compute.
-- **300 Million to 1 Billion Tokens/Month**: The upstream flagship `deepseek-v4-flash` offers ultra-competitive pricing (roughly 1 credit per 500k–1M tokens). With 1,166 monthly credits, you have an effective allowance of **10M to 30M tokens per day** — more than enough for intensive Copilot/Cursor coding, autonomous agent loops, and daily translation.
-- **Negligible Cron Overhead**: The keepalive pipeline runs every 5 minutes, taking only 6–8 seconds in a lightweight container (~0.002 core-hours per run), totaling less than 20 core-hours across the entire month.
+The upstream returns a `credit` field inside `usage` on every call, so cost is
+exact rather than estimated. From live measurements against `deepseek-v4-flash`:
 
-### Workspace Lifecycle & SLA (99.85% Availability)
+- A fresh (uncached) request of ~9,000 tokens costs about **0.39 credit** —
+  roughly **~23,000 tokens per credit**, consistent across repeated runs.
+- Identical prompts hit CNB's prompt cache and drop to **~0.01 credit** — over
+  30× cheaper on the cached portion (`prompt_cache_hit_tokens` in `usage`).
 
-- **Max Continuous Run**: Up to 18 hours per session (`options.keepAliveTimeout: 64800000`).
-- **Recycle Window**: CNB recycles workspaces during the 04:00–06:00 UTC+8 overnight window if runtime exceeds 8 hours.
-- **Recovery Benchmark**: In live testing, when a workspace is recycled, the 5-minute cron detects it, boots a new container in ~35s, and self-registers the new subdomain. The entire switchover finishes in **~2 minutes 13 seconds**.
-- **Real-world SLA**: Over a 30-day period, total recycling downtime is roughly 66 minutes, delivering an empirical **99.85% uptime SLA** on purely ephemeral compute.
+At ~23k tokens/credit, 1,166 credits is on the order of **20M+ tokens/month** of
+fresh traffic, and far more once caching kicks in. Rather than trust that figure,
+watch your real burn with the built-in quota CLI below — the `credit` per request
+is reported by the upstream itself.
 
-## Supported Models & Matrix
+### Compute: enough to stay up 24/7
 
-CNB's AI gateway routes inference directly to high-speed upstream models. By default, cnb2api is configured to expose the full model suite:
+- A `runner.cpus: 2` workspace burns **48 core-hours/day**; a full 30-day month
+  of continuous uptime is **1,440 core-hours**, inside the **1,600 core-hour**
+  pool. You don't have to shut the proxy down to conserve compute.
+- The keepalive pipeline runs every 5 minutes at ~6–8s per run — a rounding
+  error against the monthly pool.
 
-| Model ID | Architecture & Capabilities | Context Window | Native Tool Calls (`tools`) | Reasoning Stream (`reasoning_content`) | Best For |
-|---|---|---|:---:|:---:|---|
-| `deepseek-v4-flash` *(Default)* | State-of-the-art multimodal / high-throughput architecture | 64k ~ 128k | ✅ Yes | ✅ Yes (Full aggregation) | Daily coding, autonomous agents, high-concurrency tasks |
-| `glm-5.3-flash` *(Alias)* | General-purpose smart router alias | 64k ~ 128k | ✅ Yes | ✅ Yes | Clients pre-configured with GLM conventions |
-| `kimi-k3` *(Alias)* | Extended-context capable smart router alias | 64k ~ 128k | ✅ Yes | ✅ Yes | Long-context reading and document QA |
-| `deepseek-chat` *(Alias)* | Universal standard OpenAI alias | 64k ~ 128k | ✅ Yes | ✅ Yes | Drop-in replacement for standard OpenAI client tools |
+### Workspace lifecycle
 
-All models support both **streaming SSE** and **non-streaming** requests with complete token usage aggregation (`prompt_tokens`, `completion_tokens`, `total_tokens`).
+- **Max continuous run**: up to 18 hours per session
+  (`options.keepAliveTimeout` raised to its ceiling).
+- **Overnight recycle**: CNB reclaims a workspace that has run past 8 hours
+  during the 04:00–06:00 (UTC+8) window; the keepalive loop brings it back.
+- **Measured recovery**: in a live recycle drill, detection → new workspace →
+  self-registration completed in about **2m13s**, with the fixed domain and API
+  key unchanged throughout.
+
+## Models
+
+`/v1/models` advertises whatever you list in `PROXY_MODELS`. On our account the
+CNB AI gateway currently exposes three ids:
+
+| Model id | Notes |
+|---|---|
+| `deepseek-v4-flash` | The model that actually answers today. |
+| `glm-5.3-flash` | Accepted as an id, but the gateway routes it to `deepseek-v4-flash` (the response's `model` field comes back as `deepseek-v4-flash`). |
+| `kimi-k3` | Same — currently routed to `deepseek-v4-flash`. |
+
+In other words, all three ids resolve to one upstream model right now; the extra
+names exist for client compatibility. Set `PROXY_MODELS` to whatever your own
+account exposes.
+
+**Verified working** against the live endpoint: streaming SSE and non-streaming
+requests, full `usage` aggregation (including the `credit` field), and native
+**function/tool calls** — a `tools` request returns a proper `tool_calls` reply
+with `finish_reason: tool_calls`. Context-window limits are set by the upstream
+and not documented here, so we don't quote a number we can't verify.
 
 ## Get started — deploy on CNB
 
@@ -272,7 +300,7 @@ curl http://127.0.0.1:9001/v1/chat/completions \
 | `PROXY_KEY` | — (required) | Bearer key clients must send. No default; refuses to start if missing. |
 | `CNB_TOKEN` | — (required) | Upstream token; injected by the CNB pipeline stage. |
 | `CNB_REPO_SLUG` | `CNB_BUILD_REPO` | `org/repo` used to build the upstream URL. Auto-filled inside a workspace. |
-| `PROXY_MODELS` | `deepseek-v4-flash,glm-5.3-flash,kimi-k3,deepseek-chat` | Comma-separated ids advertised on `/v1/models`. |
+| `PROXY_MODELS` | `deepseek-v4-flash,glm-5.3-flash,kimi-k3` | Comma-separated ids advertised on `/v1/models`. |
 | `PROXY_PORT` | `9001` | Listen port. |
 | `PROXY_UPSTREAM_TIMEOUT_MS` | `15000` | Upstream connect / first-byte timeout. |
 | `PROXY_IDLE_TIMEOUT_MS` | `300000` | Per-stream idle watchdog. |
