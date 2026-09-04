@@ -13,100 +13,27 @@ English · [简体中文](README.zh-CN.md)
 
 </div>
 
-Turn a [CNB](https://cnb.cool) cloud-workspace **in-network AI endpoint** into a
-standard **OpenAI-compatible** API — 100% in the cloud, zero local dependencies,
-with a self-healing fixed public address that shrugs off daily workspace
-recycling. No reverse engineering, no anonymous endpoints: this is the
-on-the-books way to use your credits.
+CNB gives every verified org a monthly pool of free AI credits — but they're
+only reachable from **inside** a CNB cloud workspace (the endpoint needs a
+pipeline `CNB_TOKEN` and CNB-internal networking). **cnb2api** runs a tiny
+reverse proxy inside that workspace and turns it into a stable
+`https://…/v1/chat/completions` URL that any OpenAI client can call from
+anywhere.
 
-CNB's built-in AI credits are only reachable from inside a CNB cloud workspace
-(the endpoint requires a pipeline `CNB_TOKEN` and CNB-internal networking). This
-project runs a tiny reverse proxy **inside** that workspace and exposes it as a
-plain `https://.../v1/chat/completions` endpoint you can point any OpenAI client at.
+- 🔓 **Above-board.** It uses only the **official, documented** workspace AI
+  endpoint with the pipeline `CNB_TOKEN` CNB itself issues — no reverse-engineered
+  front-end endpoints, no anonymous session scraping, nothing that fights the
+  platform's rules.
+- ♻️ **Survives daily recycling.** CNB reclaims workspaces overnight and the
+  subdomain changes on every restart. A keepalive loop heals that automatically,
+  so your clients keep one fixed URL and never notice — an always-on endpoint on
+  a throwaway machine.
+- 🪶 **Zero dependencies.** Node 22+ built-ins only (`fetch` / `AbortSignal` /
+  streams); tests run on the built-in `node:test` runner. Nothing to `npm install`.
+- 📊 **Quota in your terminal.** A one-command dashboard for your AI credits and
+  core-hours — the only such tool in the CNB ecosystem.
 
-> Node 22+ · **zero npm dependencies** (native `fetch` / `AbortSignal` / streams) ·
-> tests use the built-in `node:test` runner.
-
-> [!NOTE]
-> **Above-board by design.** cnb2api talks only to the **official workspace AI
-> endpoint** with the pipeline `CNB_TOKEN` CNB itself issues — no
-> reverse-engineered front-end endpoints, no anonymous session scraping, and
-> nothing that conflicts with the platform's community rules.
-
-## Why cnb2api?
-
-CNB ships generous free AI credits, but three things keep them locked inside
-the workspace:
-
-| The problem | What cnb2api does |
-|---|---|
-| The AI endpoint answers only on CNB-internal networking | a tiny reverse proxy runs **inside** the workspace and relays it |
-| `CNB_TOKEN` is minted per pipeline run and can't be stored | a keepalive cron mints a fresh token on every run; your secrets stay in a private repo |
-| The workspace subdomain changes on every restart | the workspace self-registers on boot; your fixed domain follows automatically |
-| Gray-area mirrors of CNB's AI break on every platform change, and native tool calls get 403'd | we use the **documented, official endpoint** — no front-end reverse engineering, full `tools` support, nothing to break when the UI changes |
-
-The result is one stable `https://…/v1` URL that works from anywhere — your
-laptop, CI, or any hosted app. And because it's your own org's endpoint with
-your own credits, it stays within the platform's terms of service.
-
-## High availability on a throwaway machine
-
-CNB recycles cloud workspaces (e.g. overnight), and every restart mints a new
-subdomain. Instead of fighting that, cnb2api treats the workspace as
-**cattle, not a pet** — and turns a machine that dies every day into an
-always-on endpoint that behaves like a high-availability VPS:
-
-```
-every 5 min (cron pipeline)          on every boot                 your VPS / relay
-┌─────────────────────────────┐   ┌──────────────────────┐   ┌─────────────────────┐
-│ workspace alive?            │   │ start.sh runs →      │   │ nginx upstream map  │
-│  alive + domain OK → noop   │──▶│ POST /ops/register   │──▶│ repointed to the    │
-│  domain dead      → re-reg  │   │ (current subdomain)  │   │ latest subdomain    │
-│  not alive        → restart │   └──────────────────────┘   └─────────────────────┘
-└─────────────────────────────┘
-```
-
-- **Self-healing**: the keepalive cron detects a dead workspace and restarts
-  it; two consecutive failed health checks on the fixed domain trigger
-  re-registration. No human in the loop.
-- **Fixed address, moving backend**: clients only ever see
-  `https://ai.example.com/v1`; the relay repoints to the fresh subdomain
-  within minutes of a recycle.
-- **Zero long-lived credentials at risk**: a recycled workspace carries no
-  tokens on disk — the next boot mints a fresh `CNB_TOKEN` by design.
-
-The result: daily restarts become a non-event. Your clients keep the same
-URL, the same key, and never notice a recycle happened.
-
-## Features
-
-- **Above-board**: only the **official, documented workspace AI endpoint** with
-  the pipeline `CNB_TOKEN` — no reverse-engineered front-end endpoints, no
-  anonymous session pools, no community-rule gray areas. Your credits, your
-  org, on the record.
-- **OpenAI-compatible**: `/v1/chat/completions` (streaming SSE + non-streaming),
-  `/v1/models`, `/health`.
-- **Quota dashboard in your terminal — the only one in the CNB ecosystem**:
-  one command shows AI credits and core-hours with traffic-light progress
-  bars — know what's left before it runs out. Ships as `cnb2api-quota` /
-  `npm run quota`, still zero dependencies.
-- **Faithful non-stream aggregation**: reassembles `content`, incremental
-  `tool_calls`, `reasoning_content`, `usage`, and `finish_reason` from the
-  upstream SSE stream into a complete `chat.completion` object.
-- **Production-hardened forwarding**: connect timeout, per-stream idle watchdog,
-  backpressure handling, and two-way cancellation — a client disconnect aborts
-  the upstream so you stop burning credits on an abandoned request.
-- **Timing-safe key auth** with a sliding-window failure limiter (429 on abuse).
-- **High availability on a throwaway machine**: CNB recycles workspaces daily
-  and the subdomain changes on every restart — a keepalive cron restarts a dead
-  workspace, the workspace self-registers its new URI on boot, and a small relay
-  repoints your fixed domain automatically. Clients keep one stable URL and
-  never notice a recycle. Effectively an always-on VPS built on an ephemeral box.
-- **No long-lived tokens on disk**: the keepalive pipeline uses the per-run
-  temporary `CNB_TOKEN`; your API key and relay token live in a private secrets
-  repo injected via `imports:`, never committed here.
-
-## Architecture
+## How it works
 
 ```
 client ──https://ai.example.com/v1──▶ fixed domain (your relay / nginx)
@@ -121,113 +48,136 @@ client ──https://ai.example.com/v1──▶ fixed domain (your relay / nginx
        https://api.cnb.cool/<org>/<repo>/-/ai/chat/completions   (CNB AI endpoint)
 ```
 
-Keepalive (see [docs/DESIGN.md](docs/DESIGN.md)): a cron pipeline makes sure the
-workspace is running (fresh short-lived `CNB_TOKEN`); the workspace self-registers
-its subdomain to the relay on boot; the relay only follows the current address.
+`ai.example.com`, `<org>/<repo>`, and port `9001` are **placeholders** — set them
+to your own values. The fixed domain is optional; without it you use the raw
+`https://<subdomain>-9001.cnb.run/v1` URL from the build log.
 
-`ai.example.com`, `<org>/<repo>`, port `9001` above are **placeholders** — set them
-to your own values.
+### Staying alive on a machine that dies daily
+
+The workspace is treated as **cattle, not a pet**. A cron pipeline and a small
+relay turn a box that gets recycled every night into an endpoint that behaves
+like a high-availability VPS:
+
+```
+every 5 min (cron pipeline)          on every boot                 your relay
+┌─────────────────────────────┐   ┌──────────────────────┐   ┌─────────────────────┐
+│ workspace alive?            │   │ start.sh runs →      │   │ nginx upstream map  │
+│  alive + domain OK → noop   │──▶│ POST /ops/register   │──▶│ repointed to the    │
+│  domain dead      → re-reg  │   │ (current subdomain)  │   │ latest subdomain    │
+│  not alive        → restart │   └──────────────────────┘   └─────────────────────┘
+└─────────────────────────────┘
+```
+
+- **Self-healing** — the cron restarts a dead workspace; two failed health
+  checks on the fixed domain trigger re-registration. No human in the loop.
+- **Fixed address, moving backend** — clients only ever see one URL; the relay
+  repoints to the fresh subdomain within minutes of a recycle. In a live drill,
+  full recovery (detect → new workspace → re-register) took **~2m13s**.
+- **No long-lived tokens on disk** — a recycled workspace carries nothing; the
+  next boot mints a fresh `CNB_TOKEN` by design. Your `PROXY_KEY` and
+  `REG_TOKEN` live in a private secrets repo, injected at build time.
+
+This is HA at the **service** level, not the instance level: the stable URL and
+working proxy survive recycles automatically. The cost is a couple of minutes of
+downtime per recovery — a hard trade to beat for a personal gateway at zero
+extra infrastructure. Design details: [docs/DESIGN.md](docs/DESIGN.md).
+
+## Features
+
+- **OpenAI-compatible** — `/v1/chat/completions` (streaming SSE + non-streaming),
+  `/v1/models`, `/health`. Native **function/tool calls** pass through untouched.
+- **Faithful non-stream aggregation** — reassembles `content`, incremental
+  `tool_calls`, `reasoning_content`, `usage`, and `finish_reason` from the SSE
+  stream into one complete `chat.completion` object.
+- **Production-hardened forwarding** — connect timeout, per-stream idle watchdog,
+  backpressure handling, and two-way cancellation (a client disconnect aborts the
+  upstream, so you stop burning credits on an abandoned request).
+- **Timing-safe key auth** — with a sliding-window failure limiter (429 on abuse).
+- **Quota dashboard CLI** — `cnb2api-quota` reads CNB's charge API directly; see
+  [below](#quota-dashboard-cli).
+
+## Quickstart — deploy on CNB
+
+**Full walkthrough: [docs/SETUP.md](docs/SETUP.md)** — from zero to a verified
+endpoint in ~10 minutes (code repo → secrets repo with `allow_slugs` →
+`.cnb.yml` edits → workspace boot → end-to-end check, with a troubleshooting
+table).
+
+You need: a CNB account whose org has AI credits enabled, and your model ids for
+`PROXY_MODELS`. For the optional fixed public domain that follows restarts
+automatically, deploy the nginx relay in [docs/DEPLOY.md](docs/DEPLOY.md). Every
+setting is documented in [`.env.example`](.env.example) and the
+[Configuration](#configuration) table.
 
 ## What you actually get
 
-Two independent free allowances power this setup: **AI credits** for inference and
-**core-hours** for the compute the proxy runs on. Numbers below come from our own
-running deployment — measured, not marketing.
+Two independent free allowances power this setup: **AI credits** for inference,
+and **core-hours** for the compute the proxy runs on. The numbers below are
+measured on our own running deployment — not marketing.
 
-### The two quotas
-
-| Resource | Free monthly quota | What it pays for |
+| Allowance | Free monthly quota | What it pays for |
 |---|---|---|
-| **AI credits** | **500** base, up to **1,166** with the *hello-cnb* bonus | Every AI request; each response's `usage` reports the `credit` it cost |
+| **AI credits** | **500** base, up to **1,166** with the *hello-cnb* bonus | Every AI request — each response's `usage` reports the exact `credit` it cost |
 | **Compute core-hours** | **1,600 core-hours** (shared dev + CI pool) | The workspace running the proxy, plus the keepalive pipeline |
 
-> The 500 base credits come with a verified org. Completing CNB's official
+> The 500 base credits come with a verified org; completing CNB's official
 > *hello-cnb* onboarding ("Genius Programmer" badge) adds a recurring monthly
-> bonus, bringing our account to 1,166/month. Your total depends on your own
-> account status.
+> bonus (1,166/month on our account). Your total depends on your own account.
 
-### Credits: measured token cost
+**Credits → tokens (measured).** The upstream returns a `credit` field in every
+response's `usage`, so cost is exact. Against `deepseek-v4-flash`:
 
-The upstream returns a `credit` field inside `usage` on every call, so cost is
-exact rather than estimated. From live measurements against `deepseek-v4-flash`:
+- A fresh (uncached) ~9,000-token request costs about **0.39 credit** — roughly
+  **23,000 tokens per credit**, consistent across runs.
+- An identical prompt hits CNB's prompt cache and drops to **~0.01 credit** —
+  about **1/30** the price on the cached portion.
 
-- A fresh (uncached) request of ~9,000 tokens costs about **0.39 credit** —
-  roughly **~23,000 tokens per credit**, consistent across repeated runs.
-- Identical prompts hit CNB's prompt cache and drop to **~0.01 credit** — over
-  30× cheaper on the cached portion (`prompt_cache_hit_tokens` in `usage`).
+So the blended rate depends on your cache-hit rate. At a **90% hit rate** (fixed
+system prompts, agent loops re-reading the same context) the average cost is
+`10%×1 + 90%×(1/30) ≈ 13%` of full price — about **177k tokens/credit**, or
+roughly **200M tokens/month** on 1,166 credits. Don't take any single figure on
+faith: watch your real burn with the [quota CLI](#quota-dashboard-cli).
 
-At ~23k tokens/credit, 1,166 credits covers **20M+ tokens/month** of fresh
-traffic. Cached prompts cost only ~1/30 of full price, so the blended rate
-depends on your cache-hit rate: at a **90% hit rate** (fixed system prompts,
-agent loops re-reading the same context) the average cost is
-`10% × 1 + 90% × 1/30 ≈ 13%` of full price — roughly **~177k tokens per
-credit**, or about **200M tokens/month** on 1,166 credits. Rather than trust
-any single figure, watch your real burn with the built-in quota CLI below —
-the `credit` per request is reported by the upstream itself.
-
-### Compute: enough to stay up 24/7
-
-- A `runner.cpus: 2` workspace burns **48 core-hours/day**; a full 30-day month
-  of continuous uptime is **1,440 core-hours**, inside the **1,600 core-hour**
-  pool. You don't have to shut the proxy down to conserve compute.
-- The keepalive pipeline runs every 5 minutes at ~6–8s per run — a rounding
-  error against the monthly pool.
-
-### Workspace lifecycle
-
-- **Max continuous run**: up to 18 hours per session
-  (`options.keepAliveTimeout` raised to its ceiling).
-- **Overnight recycle**: CNB reclaims a workspace that has run past 8 hours
-  during the 04:00–06:00 (UTC+8) window; the keepalive loop brings it back.
-- **Measured recovery**: in a live recycle drill, detection → new workspace →
-  self-registration completed in about **2m13s**, with the fixed domain and API
-  key unchanged throughout.
+**Core-hours → uptime.** A `runner.cpus: 2` workspace burns **48 core-hours/day**;
+a full 30-day month of continuous uptime is **1,440 core-hours**, inside the
+**1,600** pool — you never have to shut the proxy down to save compute. The
+5-minute keepalive adds only a few core-hours a month. CNB caps a session at
+18h and recycles workspaces that run past 8h during the 04:00–06:00 (UTC+8)
+window; the keepalive loop brings them straight back.
 
 ## Models
 
-`/v1/models` advertises whatever you list in `PROXY_MODELS`. On our account the
-CNB AI gateway currently exposes three ids:
+`/v1/models` advertises whatever you set in `PROXY_MODELS`. On our account the
+CNB gateway currently exposes three ids — and routes all of them to one upstream
+model today:
 
 | Model id | Notes |
 |---|---|
 | `deepseek-v4-flash` | The model that actually answers today. |
-| `glm-5.3-flash` | Accepted as an id, but the gateway routes it to `deepseek-v4-flash` (the response's `model` field comes back as `deepseek-v4-flash`). |
+| `glm-5.3-flash` | Accepted, but routed to `deepseek-v4-flash` (the response's `model` field confirms it). |
 | `kimi-k3` | Same — currently routed to `deepseek-v4-flash`. |
 
-In other words, all three ids resolve to one upstream model right now; the extra
-names exist for client compatibility. Set `PROXY_MODELS` to whatever your own
-account exposes.
+The extra names exist for client compatibility. Set `PROXY_MODELS` to whatever
+your own account exposes. Streaming and non-streaming requests, full `usage`
+aggregation (including `credit`), and native `tools` calls are all verified
+working against the live endpoint. Context-window limits are set by the upstream
+and undocumented, so we don't quote a number we can't verify.
 
-**Verified working** against the live endpoint: streaming SSE and non-streaming
-requests, full `usage` aggregation (including the `credit` field), and native
-**function/tool calls** — a `tools` request returns a proper `tool_calls` reply
-with `finish_reason: tool_calls`. Context-window limits are set by the upstream
-and not documented here, so we don't quote a number we can't verify.
+## Use it anywhere
 
-## Get started — deploy on CNB
+The endpoint speaks plain OpenAI chat completions, so anything that accepts a
+custom base URL just works. Point the base URL at your fixed domain
+(`https://ai.example.com/v1`) and set the API key to your `PROXY_KEY`:
 
-**Start here: [docs/SETUP.md](docs/SETUP.md)** — a from-zero walkthrough
-(code repo → secrets repo with `allow_slugs` → `.cnb.yml` edits → workspace
-boot → end-to-end verification, plus a troubleshooting table). ~10 minutes if
-you already have a CNB account with AI credits.
-
-Prerequisites in one line: a CNB account whose org has AI credits enabled and
-knowledge of your model names (`PROXY_MODELS`). Quota expectations: a 2-cpu
-always-on workspace ≈ 48 core-hours/day against CNB's free ~1600 core-hours/month.
-
-For the optional fixed public domain (`https://ai.example.com/v1`) that follows
-workspace restarts automatically, deploy the nginx relay described in
-[docs/DEPLOY.md](docs/DEPLOY.md). Without it, use the raw
-`https://<subdomain>-9001.cnb.run/v1` URL printed in the build log (it changes
-on each workspace restart).
-
-See [`.env.example`](.env.example) for every knob.
+- **Chat UIs** — LobeChat, Cherry Studio, Open WebUI, NextChat…
+- **Coding agents / SDKs** — Codex CLI, the official `openai` SDK, or any
+  OpenAI-compatible toolchain.
+- **curl** — see [Local development](#local-development).
 
 ## Quota dashboard (CLI)
 
-Your CNB org ships with monthly AI credits and free core-hours, but CNB only
-shows them buried in the web console. `cnb2api-quota` puts them one command
-away, right in your terminal:
+CNB only shows your credits and core-hours buried in the web console.
+`cnb2api-quota` puts them one command away:
 
 ```bash
 npm run quota                 # or: npx cnb2api-quota
@@ -245,31 +195,18 @@ npm run quota                 # or: npx cnb2api-quota
   remaining credits: 680.0 cr   as of 2026-01-15 08:30:00 UTC
 ```
 
-Traffic-light bars (green → yellow → red as you burn down), thousands
-separators, and in-flight amounts that are reserved but not yet settled. Two
-more output modes for machines and prompts:
+Traffic-light bars (green → yellow → red), thousands separators, and in-flight
+amounts reserved but not yet settled. Two more output modes:
 
 ```bash
 cnb2api-quota --json          # normalized snapshot for scripts
 cnb2api-quota --line          # one-liner for status bars / shell prompts
 ```
 
-It reads CNB's charge API directly (`/-/charge/quota` + `/-/charge/volume`),
-so it works whether or not your proxy workspace is running, and it never needs
-the pipeline `CNB_TOKEN`'s special scopes — any token that can see the org's
-billing works. Org comes from `CNB_REPO_SLUG`, or override with
-`--org <org>` / `QUOTA_ORG`.
-
-## Use it anywhere
-
-The endpoint speaks plain OpenAI chat completions, so anything that accepts a
-custom base URL just works — set the base URL to your fixed domain
-(`https://ai.example.com/v1`) and the API key to `PROXY_KEY`:
-
-- **Chat UIs** — LobeChat, Cherry Studio, Open WebUI, NextChat…
-- **Coding agents / SDKs** — Codex CLI, the official `openai` SDK, or any
-  OpenAI-compatible toolchain.
-- **curl** — see the example under [Local development](#local-development).
+It reads CNB's charge API directly (`/-/charge/quota` + `/-/charge/volume`), so
+it works whether or not your proxy workspace is running, and any token that can
+see the org's billing works — no special pipeline scopes needed. The org comes
+from `CNB_REPO_SLUG`, or override with `--org <org>` / `QUOTA_ORG`.
 
 ## Local development
 
@@ -279,7 +216,7 @@ Run the test suite (mock upstream, no real API calls):
 node --test
 ```
 
-Run the proxy standalone (pointing at any OpenAI-style upstream via the test hook):
+Run the proxy standalone against any OpenAI-style upstream via the test hook:
 
 ```bash
 PROXY_KEY=my-secret \
@@ -289,12 +226,10 @@ UPSTREAM_OVERRIDE=http://127.0.0.1:8080 \
 node src/server.mjs
 ```
 
-Then:
-
 ```bash
 curl http://127.0.0.1:9001/v1/chat/completions \
   -H "Authorization: Bearer my-secret" -H "Content-Type: application/json" \
-  -d '{"model":"model-a","messages":[{"role":"user","content":"hi"}],"stream":false}'
+  -d '{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"hi"}],"stream":false}'
 ```
 
 ## Configuration
@@ -316,53 +251,33 @@ curl http://127.0.0.1:9001/v1/chat/completions \
 ## FAQ
 
 **How is this different from the anonymous CNB proxies on GitHub?**
-Fundamentally. Those wrap the front-end NPC chat endpoint that
-[CNB](https://cnb.cool) exposes for anonymous web visitors: they scrape CSRF
-tokens, rotate session pools, and re-derive the protocol whenever the site
-changes — fragile, account-free, and clearly not what the platform intends.
-cnb2api uses the **official workspace AI endpoint** instead: documented path,
-your org's credits, full `tools` support, and a usage trail on your own
-account. It costs your allowance rather than someone else's patience — and it
-stays working.
+Fundamentally. Those wrap the front-end NPC chat endpoint CNB exposes for
+anonymous web visitors — scraping CSRF tokens, rotating session pools, and
+re-deriving the protocol whenever the site changes. That's fragile, account-free,
+and clearly not what the platform intends. cnb2api uses the **official workspace
+AI endpoint**: documented path, your org's credits, full `tools` support, and a
+usage trail on your own account. It costs your allowance rather than someone
+else's patience — and it keeps working when the UI changes.
 
-**Is it really zero dependencies?**
-Yes. Runtime and tests use Node 22 built-ins only — there is nothing to
-`npm install`, and nothing in `node_modules` to audit.
-
-**What does running it cost?**
-The code is MIT and free. You spend your CNB allowance: AI credits per
-request, plus core-hours while the keepalive holds the workspace open
-(≈48 core-hours/day at 2 CPUs — the budget math is in
-[SETUP.md](docs/SETUP.md)).
+**Do native tool calls work?**
+Yes. Requests go through the official endpoint with your pipeline token, so
+`tools` / `tool_calls` pass through untouched — no prompt-injection workarounds.
 
 **Which API endpoints are implemented?**
 `/v1/chat/completions` (SSE streaming + non-streaming), `/v1/models`, and
 `/health`. No embeddings/audio/files — the upstream doesn't offer them either.
 
-**Where do my keys live?**
-`PROXY_KEY` and `REG_TOKEN` stay in your private secrets repo and are injected
-at build time via `imports:`. No long-lived CNB token is ever written to disk.
-
 **Does it work with Anthropic-format clients?**
-Not directly — this is an OpenAI-compatible shim. Use a client that speaks
+Not directly — this is an OpenAI-compatible shim. Use a client that speaks the
 OpenAI format (most chat UIs and agents do).
 
-**Do native tool calls work?**
-Yes. Requests go through the official endpoint with your pipeline token, so
-`tools` / `tool_calls` are passed through untouched — no prompt-injection
-workarounds needed.
-
-**Is this really "high availability"? It's one workspace.**
-It's HA at the service level, not the instance level: the service (a stable
-URL + working proxy) survives daily workspace recycles automatically, with
-recovery measured in minutes and zero human intervention. What you give up
-vs. a real multi-node setup is a few minutes of unavailability during each
-recovery — for a personal AI gateway, that trade is hard to beat at zero
-extra infrastructure cost.
+**What does running it cost?**
+The code is MIT and free. You spend your CNB allowance: AI credits per request,
+plus core-hours while the keepalive holds the workspace open (≈48 core-hours/day
+at 2 CPUs — see the budget math above).
 
 **Is this affiliated with CNB?**
-No. Independent, personal-use project — see the note under
-[License](#license). Respect the platform's terms of service.
+No. Independent, personal-use project. Respect the platform's terms of service.
 
 ## License
 
@@ -371,5 +286,5 @@ MIT — see [LICENSE](LICENSE).
 > Not affiliated with CNB. This is an independent, personal-use compatibility
 > shim. Respect the AI provider's and platform's terms of service.
 
-If cnb2api saved you a paid API subscription, consider giving it a ⭐ — it
-helps other CNB users find it.
+If cnb2api saved you a paid API subscription, consider giving it a ⭐ — it helps
+other CNB users find it.
