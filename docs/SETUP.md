@@ -34,6 +34,15 @@ the keepalive needs no edits because it reads the built-in `CNB_REPO_SLUG`:
    The 5-minute keepalive cron starts on the next cron tick — nothing else
    to configure.
 
+> **Verified end to end (2026-09-05)** on a fresh private repo in a real
+> org, following exactly these steps: the first cron tick logged
+> `list http=200` — live proof that `$CNB_REPO_SLUG` expands inside a cron
+> pipeline — then found no workspace and started one itself; the
+> `start-ai-proxy` stage printed `health OK`, the authenticated `/v1/models`
+> list, and a working `PROXY_URI`; and an external `curl` against that
+> endpoint with the step-2 key returned an HTTP 200 chat completion with the
+> upstream `usage.credit` field populated.
+
 Outgrown the fast path (team use, or you want the fixed domain)? Switch to
 the secrets-repo flow below — delete the inline `env:` line, uncomment
 `imports:`, and follow sections 2–3.

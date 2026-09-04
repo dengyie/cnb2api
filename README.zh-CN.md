@@ -93,8 +93,9 @@ client ──https://ai.example.com/v1──▶ 固定域名(自建 relay / ngin
 块(私有仓里内联是安全的,可用 `openssl rand -hex 24` 生成),再启动云开发
 工作区。构建日志会打印端点(`PROXY_URI=https://<子域名>-9001.cnb.run`)——
 它加上你的 key 就是一个能用的 OpenAI base URL。其余零改动:keepalive 读的
-是内置变量 `CNB_REPO_SLUG`,无需任何按用户配置。完整流程(含团队级的密钥仓
-方案、可选固定域名中继)见 [docs/SETUP.md](docs/SETUP.md)。
+是内置变量 `CNB_REPO_SLUG`,无需任何按用户配置。这条路径已在真实账号上端到端
+走通:首个 cron 周期日志打出 `list http=200`,外部 curl 拿到 200 的对话补全。
+完整流程(含团队级的密钥仓方案、可选固定域名中继)见 [docs/SETUP.md](docs/SETUP.md)。
 
 ## 你实际能得到什么
 

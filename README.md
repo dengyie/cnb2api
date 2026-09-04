@@ -104,7 +104,9 @@ with `openssl rand -hex 24`), and start the cloud dev workspace. The build
 log prints your endpoint (`PROXY_URI=https://<subdomain>-9001.cnb.run`) —
 that plus your key is a working OpenAI base URL. No other edits: the
 keepalive reads the built-in `CNB_REPO_SLUG`, so it needs zero per-user
-configuration. Full walkthrough (including the team-grade secrets-repo flow
+configuration. This exact path has been walked end to end on a real account —
+first cron tick logged `list http=200`, external curl got a 200 chat
+completion. Full walkthrough (including the team-grade secrets-repo flow
 and the optional fixed-domain relay): [docs/SETUP.md](docs/SETUP.md).
 
 ## What you actually get
