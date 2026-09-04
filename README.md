@@ -16,6 +16,9 @@ plain `https://.../v1/chat/completions` endpoint you can point any OpenAI client
 
 - **OpenAI-compatible**: `/v1/chat/completions` (streaming SSE + non-streaming),
   `/v1/models`, `/health`.
+- **Quota dashboard in your terminal**: one command shows AI credits and
+  core-hours with traffic-light progress bars — know what's left before it runs
+  out. Ships as `cnb2api-quota` / `npm run quota`, still zero dependencies.
 - **Faithful non-stream aggregation**: reassembles `content`, incremental
   `tool_calls`, `reasoning_content`, `usage`, and `finish_reason` from the
   upstream SSE stream into a complete `chat.completion` object.
@@ -76,6 +79,43 @@ curl http://127.0.0.1:9001/v1/chat/completions \
   -d '{"model":"model-a","messages":[{"role":"user","content":"hi"}],"stream":false}'
 ```
 
+## Quota dashboard (CLI)
+
+Your CNB org ships with monthly AI credits and free core-hours, but CNB only
+shows them buried in the web console. `cnb2api-quota` puts them one command
+away, right in your terminal:
+
+```bash
+npm run quota                 # or: npx cnb2api-quota
+```
+
+```
+  ◆ CNB quota  your-org
+
+  Credits  ██████████████████████──────   7.4%   85.7 / 1,166.0 cr
+  Dev      ██████████████████████──────   6.6%   106.2 / 1,600.0 core-h
+  CI       ██████████████████████──────   7.6%   12.1 / 160.0 core-h
+
+  in-flight (not yet settled): 2.4 cr, 1.3 core-h
+
+  remaining credits: 1,080.3 cr   as of 2026-09-04 21:04:53 UTC
+```
+
+Traffic-light bars (green → yellow → red as you burn down), thousands
+separators, and in-flight amounts that are reserved but not yet settled. Two
+more output modes for machines and prompts:
+
+```bash
+cnb2api-quota --json          # normalized snapshot for scripts
+cnb2api-quota --line          # one-liner for status bars / shell prompts
+```
+
+It reads CNB's charge API directly (`/-/charge/quota` + `/-/charge/volume`),
+so it works whether or not your proxy workspace is running, and it never needs
+the pipeline `CNB_TOKEN`'s special scopes — any token that can see the org's
+billing works. Org comes from `CNB_REPO_SLUG`, or override with
+`--org <org>` / `QUOTA_ORG`.
+
 ## Deploy on CNB
 
 **Start here: [docs/SETUP.md](docs/SETUP.md)** — a from-zero walkthrough
@@ -107,6 +147,7 @@ See [`.env.example`](.env.example) for every knob.
 | `PROXY_IDLE_TIMEOUT_MS` | `300000` | Per-stream idle watchdog. |
 | `REGISTER_URL` | — (optional) | Relay `/ops/register` endpoint for self-registration. |
 | `REG_TOKEN` | — (optional) | Shared secret for self-registration. |
+| `QUOTA_ORG` | — (optional) | Org for the quota CLI when it differs from `CNB_REPO_SLUG`. |
 | `UPSTREAM_OVERRIDE` | — | Test-only: point the upstream at a local mock. |
 
 ## License

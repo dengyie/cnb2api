@@ -6,8 +6,12 @@
   "engines": {
     "node": ">=22"
   },
+  "bin": {
+    "cnb2api-quota": "bin/cnb2api-quota.mjs"
+  },
   "scripts": {
     "start": "node src/server.mjs",
+    "quota": "node bin/cnb2api-quota.mjs",
     "test": "node --test"
   },
   "license": "MIT",
@@ -17,6 +21,8 @@
     "cnb",
     "llm",
     "api-gateway",
-    "sse"
+    "sse",
+    "quota",
+    "cli"
   ]
 }
