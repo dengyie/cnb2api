@@ -1,0 +1,22 @@
+{
+  "name": "cnb-ai-proxy",
+  "version": "1.0.0",
+  "description": "Expose a CNB cloud-workspace in-network AI endpoint as an OpenAI-compatible API. Zero dependencies.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test"
+  },
+  "license": "MIT",
+  "keywords": [
+    "openai",
+    "proxy",
+    "cnb",
+    "llm",
+    "api-gateway",
+    "sse"
+  ]
+}

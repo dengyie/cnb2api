@@ -1,0 +1,94 @@
+# CNB pipeline config for cnb-ai-proxy.
+#
+# Two event blocks:
+#  1. `main` crontab — keepalive watchdog (every 5 min, fresh short-lived
+#     CNB_TOKEN, no long-lived token is ever stored anywhere).
+#  2. `$: vscode` — the cloud workspace that runs the actual proxy.
+#
+# Required pipeline env (recommended: keep them in a private CNB secrets repo
+# and pull them in via `imports:` — never commit real values):
+#   PROXY_KEY    API key your clients send (Bearer).
+#   REG_TOKEN    shared secret between start.sh and the relay's /ops/register.
+#   REGISTER_URL full URL of the relay registration endpoint, e.g.
+#                https://ai.example.com/ops/register  (optional; empty = skip)
+
+# ---------------------------------------------------------------------------
+# Keepalive: ensure the vscode workspace is alive and reachable via the fixed
+# domain. Uses the pipeline's temporary CNB_TOKEN (auto-issued per run).
+# Replace YOUR_ORG/ai-proxy with your org/repo, and FIXED with your fixed
+# domain health URL (or drop FIXED checks to rely on list/status only).
+# ---------------------------------------------------------------------------
+main:
+  "crontab: */5 * * * *":
+    - name: keepalive
+      docker:
+        image: cnbcool/default-dev-env:latest
+      # imports:
+      #   - https://cnb.cool/YOUR_ORG/your-secrets-repo/-/blob/main/proxy.yml
+      env:
+        REPO: YOUR_ORG/ai-proxy
+        FIXED: ""   # e.g. https://ai.example.com/health ; empty skips the HTTP probe
+      stages:
+        - name: ensure-workspace
+          script: |
+            set -uo pipefail
+            API="https://api.cnb.cool"
+            CODE=$(curl -s --max-time 20 -o /tmp/l.json -w '%{http_code}' "$API/workspace/list?slug=$REPO" -H "Authorization: Bearer $CNB_TOKEN")
+            echo "list http=$CODE"
+            if [ "$CODE" != "200" ]; then echo "DEGRADED: list http $CODE"; exit 0; fi
+            RUNNING=$(jq -r '[(.list // .data // [])[]? | select(.status=="running")][0].sn // empty' /tmp/l.json 2>/dev/null || true)
+            if [ -z "$RUNNING" ]; then
+              echo "no running workspace -> start"
+              curl -s --max-time 60 -X POST "$API/$REPO/-/workspace/start" -H "Authorization: Bearer $CNB_TOKEN" -H "Content-Type: application/json" -d '{"branch":"main"}' | head -c 200; echo
+              exit 0
+            fi
+            echo "running sn=$RUNNING"
+            # Fixed-domain probe (optional): two failed rounds -> try re-register -> then recycle
+            if [ -z "${FIXED:-}" ]; then echo "no FIXED url configured, workspace is running; done"; exit 0; fi
+            H1=$(curl -s --max-time 15 "$FIXED" || true)
+            case "$H1" in *'"status":"ok"'*) echo "fixed domain healthy, nothing to do"; exit 0 ;; esac
+            echo "fixed domain failed, rechecking in 60s"
+            sleep 60
+            H2=$(curl -s --max-time 15 "$FIXED" || true)
+            case "$H2" in *'"status":"ok"'*) echo "recovered on retry, nothing to do"; exit 0 ;; esac
+            # Re-register fallback: if boot-time self-registration failed, pull the
+            # PROXY_URI from the runner log and register again.
+            LOGURI=$(curl -s --max-time 30 "$API/$REPO/-/build/runner/download/log/${RUNNING}-001" -H "Authorization: Bearer $CNB_TOKEN" | grep -o 'PROXY_URI=[^ ]*' | head -1 | cut -d= -f2)
+            if [ -n "$LOGURI" ] && [ -n "${REG_TOKEN:-}" ] && [ -n "${REGISTER_URL:-}" ]; then
+              echo "re-register from runner log: $LOGURI"
+              curl -s --max-time 15 -X POST "$REGISTER_URL" -H "X-Reg-Token: $REG_TOKEN" -H "Content-Type: application/json" -d "{\"uri\":\"$LOGURI\"}" | head -c 120; echo
+              sleep 10
+              H3=$(curl -s --max-time 15 "$FIXED" || true)
+              case "$H3" in *'"status":"ok"'*) echo "recovered via re-register, nothing to do"; exit 0 ;; esac
+            fi
+            echo "still failing -> fake-death recovery: stop + start $RUNNING"
+            curl -s --max-time 30 -X POST "$API/workspace/stop" -H "Authorization: Bearer $CNB_TOKEN" -H "Content-Type: application/json" -d "{\"sn\":\"$RUNNING\"}" | head -c 120; echo
+            sleep 5
+            curl -s --max-time 60 -X POST "$API/$REPO/-/workspace/start" -H "Authorization: Bearer $CNB_TOKEN" -H "Content-Type: application/json" -d '{"branch":"main"}' | head -c 200; echo
+
+# ---------------------------------------------------------------------------
+# The workspace itself.
+# runner.cpus caps CPU (memory = cpus x 2GiB); the proxy's own HTTP long
+# connections are the heartbeat that keeps vscode alive up to keepAliveTimeout.
+# ---------------------------------------------------------------------------
+$:
+  vscode:
+    - docker:
+        image: cnbcool/default-dev-env:latest
+      # imports:
+      #   - https://cnb.cool/YOUR_ORG/your-secrets-repo/-/blob/main/proxy.yml
+      runner:
+        cpus: 2
+      services:
+        - name: vscode
+          # Platform default is 10 min without heartbeat -> recycle; raise to the
+          # max hold time so the proxy's connections count as the heartbeat.
+          options:
+            keepAliveTimeout: 18h
+        - docker
+      stages:
+        - name: start-ai-proxy
+          script: |
+            set -euo pipefail
+            export REGISTER_URL="${REGISTER_URL:-}"
+            bash "$(pwd)/deploy/start.sh"
