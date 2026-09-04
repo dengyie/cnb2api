@@ -1,4 +1,17 @@
+<div align="center">
+
 # cnb2api
+
+**Your CNB free AI credits, served over a plain OpenAI-compatible API.**
+
+[![test](https://github.com/dengyie/cnb2api/actions/workflows/test.yml/badge.svg)](https://github.com/dengyie/cnb2api/actions/workflows/test.yml)
+![node](https://img.shields.io/badge/node-%E2%89%A522-brightgreen)
+![dependencies](https://img.shields.io/badge/dependencies-0-success)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
+English · [简体中文](README.zh-CN.md)
+
+</div>
 
 Turn a [CNB](https://cnb.cool) cloud-workspace **in-network AI endpoint** into a
 standard **OpenAI-compatible** API — 100% in the cloud, zero local dependencies,
@@ -11,6 +24,20 @@ plain `https://.../v1/chat/completions` endpoint you can point any OpenAI client
 
 > Node 22+ · **zero npm dependencies** (native `fetch` / `AbortSignal` / streams) ·
 > tests use the built-in `node:test` runner.
+
+## Why cnb2api?
+
+CNB ships generous free AI credits, but three things keep them locked inside
+the workspace:
+
+| The problem | What cnb2api does |
+|---|---|
+| The AI endpoint answers only on CNB-internal networking | a tiny reverse proxy runs **inside** the workspace and relays it |
+| `CNB_TOKEN` is minted per pipeline run and can't be stored | a keepalive cron mints a fresh token on every run; your secrets stay in a private repo |
+| The workspace subdomain changes on every restart | the workspace self-registers on boot; your fixed domain follows automatically |
+
+The result is one stable `https://…/v1` URL that works from anywhere — your
+laptop, CI, or any hosted app.
 
 ## Features
 
@@ -55,10 +82,79 @@ its subdomain to the relay on boot; the relay only follows the current address.
 `ai.example.com`, `<org>/<repo>`, port `9001` above are **placeholders** — set them
 to your own values.
 
-## Quick start (local, against a mock upstream)
+## Get started — deploy on CNB
+
+**Start here: [docs/SETUP.md](docs/SETUP.md)** — a from-zero walkthrough
+(code repo → secrets repo with `allow_slugs` → `.cnb.yml` edits → workspace
+boot → end-to-end verification, plus a troubleshooting table). ~10 minutes if
+you already have a CNB account with AI credits.
+
+Prerequisites in one line: a CNB account whose org has AI credits enabled and
+knowledge of your model names (`PROXY_MODELS`). Quota expectations: a 2-cpu
+always-on workspace ≈ 48 core-hours/day against CNB's free ~1600 core-hours/month.
+
+For the optional fixed public domain (`https://ai.example.com/v1`) that follows
+workspace restarts automatically, deploy the nginx relay described in
+[docs/DEPLOY.md](docs/DEPLOY.md). Without it, use the raw
+`https://<subdomain>-9001.cnb.run/v1` URL printed in the build log (it changes
+on each workspace restart).
+
+See [`.env.example`](.env.example) for every knob.
+
+## Quota dashboard (CLI)
+
+Your CNB org ships with monthly AI credits and free core-hours, but CNB only
+shows them buried in the web console. `cnb2api-quota` puts them one command
+away, right in your terminal:
 
 ```bash
-node --test        # run the test suite (mock upstream, no real API calls)
+npm run quota                 # or: npx cnb2api-quota
+```
+
+```
+  ◆ CNB quota  your-org
+
+  Credits  ███████▋───────────────────  32%   320.0 / 1,000.0 cr
+  Dev      ██████▏─────────────────────  25%   406.4 / 1,600.0 core-h
+  CI       █▋──────────────────────────   8%   13.0 / 160.0 core-h
+
+  in-flight (not yet settled): 12.0 cr, 0.8 core-h
+
+  remaining credits: 680.0 cr   as of 2026-01-15 08:30:00 UTC
+```
+
+Traffic-light bars (green → yellow → red as you burn down), thousands
+separators, and in-flight amounts that are reserved but not yet settled. Two
+more output modes for machines and prompts:
+
+```bash
+cnb2api-quota --json          # normalized snapshot for scripts
+cnb2api-quota --line          # one-liner for status bars / shell prompts
+```
+
+It reads CNB's charge API directly (`/-/charge/quota` + `/-/charge/volume`),
+so it works whether or not your proxy workspace is running, and it never needs
+the pipeline `CNB_TOKEN`'s special scopes — any token that can see the org's
+billing works. Org comes from `CNB_REPO_SLUG`, or override with
+`--org <org>` / `QUOTA_ORG`.
+
+## Use it anywhere
+
+The endpoint speaks plain OpenAI chat completions, so anything that accepts a
+custom base URL just works — set the base URL to your fixed domain
+(`https://ai.example.com/v1`) and the API key to `PROXY_KEY`:
+
+- **Chat UIs** — LobeChat, Cherry Studio, Open WebUI, NextChat…
+- **Coding agents / SDKs** — Codex CLI, the official `openai` SDK, or any
+  OpenAI-compatible toolchain.
+- **curl** — see the example under [Local development](#local-development).
+
+## Local development
+
+Run the test suite (mock upstream, no real API calls):
+
+```bash
+node --test
 ```
 
 Run the proxy standalone (pointing at any OpenAI-style upstream via the test hook):
@@ -79,61 +175,6 @@ curl http://127.0.0.1:9001/v1/chat/completions \
   -d '{"model":"model-a","messages":[{"role":"user","content":"hi"}],"stream":false}'
 ```
 
-## Quota dashboard (CLI)
-
-Your CNB org ships with monthly AI credits and free core-hours, but CNB only
-shows them buried in the web console. `cnb2api-quota` puts them one command
-away, right in your terminal:
-
-```bash
-npm run quota                 # or: npx cnb2api-quota
-```
-
-```
-  ◆ CNB quota  your-org
-
-  Credits  ██████████████████████──────   7.4%   85.7 / 1,166.0 cr
-  Dev      ██████████████████████──────   6.6%   106.2 / 1,600.0 core-h
-  CI       ██████████████████████──────   7.6%   12.1 / 160.0 core-h
-
-  in-flight (not yet settled): 2.4 cr, 1.3 core-h
-
-  remaining credits: 1,080.3 cr   as of 2026-09-04 21:04:53 UTC
-```
-
-Traffic-light bars (green → yellow → red as you burn down), thousands
-separators, and in-flight amounts that are reserved but not yet settled. Two
-more output modes for machines and prompts:
-
-```bash
-cnb2api-quota --json          # normalized snapshot for scripts
-cnb2api-quota --line          # one-liner for status bars / shell prompts
-```
-
-It reads CNB's charge API directly (`/-/charge/quota` + `/-/charge/volume`),
-so it works whether or not your proxy workspace is running, and it never needs
-the pipeline `CNB_TOKEN`'s special scopes — any token that can see the org's
-billing works. Org comes from `CNB_REPO_SLUG`, or override with
-`--org <org>` / `QUOTA_ORG`.
-
-## Deploy on CNB
-
-**Start here: [docs/SETUP.md](docs/SETUP.md)** — a from-zero walkthrough
-(code repo → secrets repo with `allow_slugs` → `.cnb.yml` edits → workspace
-boot → end-to-end verification, plus a troubleshooting table).
-
-Prerequisites in one line: a CNB account whose org has AI credits enabled and
-knowledge of your model names (`PROXY_MODELS`). Quota expectations: a 2-cpu
-always-on workspace ≈ 48 core-hours/day against CNB's free ~1600 core-hours/month.
-
-For the optional fixed public domain (`https://ai.example.com/v1`) that follows
-workspace restarts automatically, deploy the nginx relay described in
-[docs/DEPLOY.md](docs/DEPLOY.md). Without it, use the raw
-`https://<subdomain>-9001.cnb.run/v1` URL printed in the build log (it changes
-on each workspace restart).
-
-See [`.env.example`](.env.example) for every knob.
-
 ## Configuration
 
 | Env | Default | Purpose |
@@ -150,9 +191,40 @@ See [`.env.example`](.env.example) for every knob.
 | `QUOTA_ORG` | — (optional) | Org for the quota CLI when it differs from `CNB_REPO_SLUG`. |
 | `UPSTREAM_OVERRIDE` | — | Test-only: point the upstream at a local mock. |
 
+## FAQ
+
+**Is it really zero dependencies?**
+Yes. Runtime and tests use Node 22 built-ins only — there is nothing to
+`npm install`, and nothing in `node_modules` to audit.
+
+**What does running it cost?**
+The code is MIT and free. You spend your CNB allowance: AI credits per
+request, plus core-hours while the keepalive holds the workspace open
+(≈48 core-hours/day at 2 CPUs — the budget math is in
+[SETUP.md](docs/SETUP.md)).
+
+**Which API endpoints are implemented?**
+`/v1/chat/completions` (SSE streaming + non-streaming), `/v1/models`, and
+`/health`. No embeddings/audio/files — the upstream doesn't offer them either.
+
+**Where do my keys live?**
+`PROXY_KEY` and `REG_TOKEN` stay in your private secrets repo and are injected
+at build time via `imports:`. No long-lived CNB token is ever written to disk.
+
+**Does it work with Anthropic-format clients?**
+Not directly — this is an OpenAI-compatible shim. Use a client that speaks
+OpenAI format (most chat UIs and agents do).
+
+**Is this affiliated with CNB?**
+No. Independent, personal-use project — see the note under
+[License](#license). Respect the platform's terms of service.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
 
 > Not affiliated with CNB. This is an independent, personal-use compatibility
 > shim. Respect the AI provider's and platform's terms of service.
+
+If cnb2api saved you a paid API subscription, consider giving it a ⭐ — it
+helps other CNB users find it.
