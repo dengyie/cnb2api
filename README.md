@@ -1,4 +1,4 @@
-# cnb-ai-proxy
+# cnb2api
 
 Turn a [CNB](https://cnb.cool) cloud-workspace **in-network AI endpoint** into a
 standard **OpenAI-compatible** API — 100% in the cloud, zero local dependencies,

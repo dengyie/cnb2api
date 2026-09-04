@@ -1,5 +1,5 @@
 {
-  "name": "cnb-ai-proxy",
+  "name": "cnb2api",
   "version": "1.0.0",
   "description": "Expose a CNB cloud-workspace in-network AI endpoint as an OpenAI-compatible API. Zero dependencies.",
   "type": "module",

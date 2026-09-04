@@ -1,6 +1,6 @@
 # Design
 
-`cnb-ai-proxy` exists to answer one question: **how do I get a stable
+`cnb2api` exists to answer one question: **how do I get a stable
 OpenAI-compatible URL out of an AI endpoint that only works from inside a CNB
 cloud workspace?** Everything here serves "the address is stable and
 discoverable, the key is rotatable, the behavior is predictable."

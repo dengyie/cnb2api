@@ -1,4 +1,4 @@
-# CNB pipeline config for cnb-ai-proxy.
+# CNB pipeline config for cnb2api.
 #
 # Two event blocks:
 #  1. `main` crontab — keepalive watchdog (every 5 min, fresh short-lived
