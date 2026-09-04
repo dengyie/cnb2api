@@ -15,8 +15,9 @@ English · [简体中文](README.zh-CN.md)
 
 Turn a [CNB](https://cnb.cool) cloud-workspace **in-network AI endpoint** into a
 standard **OpenAI-compatible** API — 100% in the cloud, zero local dependencies,
-with a self-healing fixed public address. No reverse engineering, no anonymous
-endpoints: this is the on-the-books way to use your credits.
+with a self-healing fixed public address that shrugs off daily workspace
+recycling. No reverse engineering, no anonymous endpoints: this is the
+on-the-books way to use your credits.
 
 CNB's built-in AI credits are only reachable from inside a CNB cloud workspace
 (the endpoint requires a pipeline `CNB_TOKEN` and CNB-internal networking). This
@@ -48,6 +49,35 @@ The result is one stable `https://…/v1` URL that works from anywhere — your
 laptop, CI, or any hosted app. And because it's your own org's endpoint with
 your own credits, it stays within the platform's terms of service.
 
+## High availability on a throwaway machine
+
+CNB recycles cloud workspaces (e.g. overnight), and every restart mints a new
+subdomain. Instead of fighting that, cnb2api treats the workspace as
+**cattle, not a pet** — and turns a machine that dies every day into an
+always-on endpoint that behaves like a high-availability VPS:
+
+```
+every 5 min (cron pipeline)          on every boot                 your VPS / relay
+┌─────────────────────────────┐   ┌──────────────────────┐   ┌─────────────────────┐
+│ workspace alive?            │   │ start.sh runs →      │   │ nginx upstream map  │
+│  alive + domain OK → noop   │──▶│ POST /ops/register   │──▶│ repointed to the    │
+│  domain dead      → re-reg  │   │ (current subdomain)  │   │ latest subdomain    │
+│  not alive        → restart │   └──────────────────────┘   └─────────────────────┘
+└─────────────────────────────┘
+```
+
+- **Self-healing**: the keepalive cron detects a dead workspace and restarts
+  it; two consecutive failed health checks on the fixed domain trigger
+  re-registration. No human in the loop.
+- **Fixed address, moving backend**: clients only ever see
+  `https://ai.example.com/v1`; the relay repoints to the fresh subdomain
+  within minutes of a recycle.
+- **Zero long-lived credentials at risk**: a recycled workspace carries no
+  tokens on disk — the next boot mints a fresh `CNB_TOKEN` by design.
+
+The result: daily restarts become a non-event. Your clients keep the same
+URL, the same key, and never notice a recycle happened.
+
 ## Features
 
 - **Above-board**: only the **official, documented workspace AI endpoint** with
@@ -67,9 +97,11 @@ your own credits, it stays within the platform's terms of service.
   backpressure handling, and two-way cancellation — a client disconnect aborts
   the upstream so you stop burning credits on an abandoned request.
 - **Timing-safe key auth** with a sliding-window failure limiter (429 on abuse).
-- **Self-healing address**: the workspace subdomain changes on every restart;
-  on boot the workspace self-registers its current URI to a small relay, which
-  repoints your fixed domain — so clients keep using one stable URL.
+- **High availability on a throwaway machine**: CNB recycles workspaces daily
+  and the subdomain changes on every restart — a keepalive cron restarts a dead
+  workspace, the workspace self-registers its new URI on boot, and a small relay
+  repoints your fixed domain automatically. Clients keep one stable URL and
+  never notice a recycle. Effectively an always-on VPS built on an ephemeral box.
 - **No long-lived tokens on disk**: the keepalive pipeline uses the per-run
   temporary `CNB_TOKEN`; your API key and relay token live in a private secrets
   repo injected via `imports:`, never committed here.
@@ -243,6 +275,14 @@ OpenAI format (most chat UIs and agents do).
 Yes. Requests go through the official endpoint with your pipeline token, so
 `tools` / `tool_calls` are passed through untouched — no prompt-injection
 workarounds needed.
+
+**Is this really "high availability"? It's one workspace.**
+It's HA at the service level, not the instance level: the service (a stable
+URL + working proxy) survives daily workspace recycles automatically, with
+recovery measured in minutes and zero human intervention. What you give up
+vs. a real multi-node setup is a few minutes of unavailability during each
+recovery — for a personal AI gateway, that trade is hard to beat at zero
+extra infrastructure cost.
 
 **Is this affiliated with CNB?**
 No. Independent, personal-use project — see the note under
