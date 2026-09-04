@@ -98,16 +98,14 @@ extra infrastructure. Design details: [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Quickstart — deploy on CNB
 
-**Full walkthrough: [docs/SETUP.md](docs/SETUP.md)** — from zero to a verified
-endpoint in ~10 minutes (code repo → secrets repo with `allow_slugs` →
-`.cnb.yml` edits → workspace boot → end-to-end check, with a troubleshooting
-table).
-
-You need: a CNB account whose org has AI credits enabled, and your model ids for
-`PROXY_MODELS`. For the optional fixed public domain that follows restarts
-automatically, deploy the nginx relay in [docs/DEPLOY.md](docs/DEPLOY.md). Every
-setting is documented in [`.env.example`](.env.example) and the
-[Configuration](#configuration) table.
+Three steps, one value. Fork this repo **private**, put your own key in
+`.cnb.yml`'s `env:` block (safe inside your own private repo — generate it
+with `openssl rand -hex 24`), and start the cloud dev workspace. The build
+log prints your endpoint (`PROXY_URI=https://<subdomain>-9001.cnb.run`) —
+that plus your key is a working OpenAI base URL. No other edits: the
+keepalive reads the built-in `CNB_REPO_SLUG`, so it needs zero per-user
+configuration. Full walkthrough (including the team-grade secrets-repo flow
+and the optional fixed-domain relay): [docs/SETUP.md](docs/SETUP.md).
 
 ## What you actually get
 
@@ -238,7 +236,7 @@ curl http://127.0.0.1:9001/v1/chat/completions \
 |-----|---------|---------|
 | `PROXY_KEY` | — (required) | Bearer key clients must send. No default; refuses to start if missing. |
 | `CNB_TOKEN` | — (required) | Upstream token; injected by the CNB pipeline stage. |
-| `CNB_REPO_SLUG` | `CNB_BUILD_REPO` | `org/repo` used to build the upstream URL. Auto-filled inside a workspace. |
+| `CNB_REPO_SLUG` | (built-in) | `org/repo` used to build the upstream URL. A built-in CNB variable, auto-filled inside every pipeline. |
 | `PROXY_MODELS` | `deepseek-v4-flash,glm-5.3-flash,kimi-k3` | Comma-separated ids advertised on `/v1/models`. |
 | `PROXY_PORT` | `9001` | Listen port. |
 | `PROXY_UPSTREAM_TIMEOUT_MS` | `15000` | Upstream connect / first-byte timeout. |

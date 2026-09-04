@@ -5,9 +5,10 @@
 #     CNB_TOKEN, no long-lived token is ever stored anywhere).
 #  2. `$: vscode` — the cloud workspace that runs the actual proxy.
 #
-# Required pipeline env (recommended: keep them in a private CNB secrets repo
-# and pull them in via `imports:` — never commit real values):
-#   PROXY_KEY    API key your clients send (Bearer).
+# Required pipeline env. Fastest path: fork this repo **private** and inline
+# PROXY_KEY below (safe inside your own private repo). Cleaner path: keep the
+# secrets in a private CNB secrets repo and pull them via `imports:`.
+#   PROXY_KEY    API key your clients send (Bearer).  <-- the one value you must set
 #   REG_TOKEN    shared secret between start.sh and the relay's /ops/register.
 #   REGISTER_URL full URL of the relay registration endpoint, e.g.
 #                https://ai.example.com/ops/register  (optional; empty = skip)
@@ -17,8 +18,10 @@
 # domain. Uses the pipeline's temporary CNB_TOKEN (auto-issued per run).
 # This block lives under the `main:` branch key — if your default branch is
 # not `main`, rename the key (or your branch) or the cron never fires.
-# Set REPO to your org/repo; uncomment FIXED with your fixed-domain health URL
-# to enable the HTTP probe + fake-death recovery (unset = status checks only).
+# Set REPO automatically: CNB_REPO_SLUG is a built-in variable (org/repo) present
+# in every pipeline, so the keepalive needs no per-user edits. Uncomment FIXED
+# with your fixed-domain health URL to enable the HTTP probe + fake-death
+# recovery (unset = status checks only).
 # ---------------------------------------------------------------------------
 main:
   "crontab: */5 * * * *":
@@ -28,7 +31,7 @@ main:
       # imports:
       #   - https://cnb.cool/YOUR_ORG/your-secrets-repo/-/blob/main/proxy.yml
       env:
-        REPO: YOUR_ORG/ai-proxy
+        REPO: $CNB_REPO_SLUG
         #FIXED: https://ai.example.com/health
       stages:
         - name: ensure-workspace
@@ -77,6 +80,10 @@ $:
   vscode:
     - docker:
         image: cnbcool/default-dev-env:latest
+      # Fastest path (private fork): inline your key here — safe in your own
+      # private repo. Cleaner path: delete the env line and use imports: instead.
+      env:
+        PROXY_KEY: "sk-set-your-own-long-random-key"
       # imports:
       #   - https://cnb.cool/YOUR_ORG/your-secrets-repo/-/blob/main/proxy.yml
       runner:

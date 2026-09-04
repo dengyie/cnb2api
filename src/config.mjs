@@ -2,9 +2,9 @@
 // The proxy refuses to start with a missing/weak key instead of running exposed.
 export const config = {
   port: Number(process.env.PROXY_PORT || 9001),
-  // CNB repo slug (org/repo). Falls back to the built-in CNB_BUILD_REPO that
-  // always exists inside a CNB workspace, so you rarely need to set this by hand.
-  repo: process.env.CNB_REPO_SLUG || process.env.CNB_BUILD_REPO || '',
+  // CNB repo slug (org/repo). CNB_REPO_SLUG is a built-in variable present in
+  // every CNB pipeline, so you rarely need to set this by hand.
+  repo: process.env.CNB_REPO_SLUG || '',
   proxyKey: process.env.PROXY_KEY || '',
   upstreamToken: process.env.CNB_TOKEN || '',
   // Model ids advertised on /v1/models. Actual routing is done by the CNB gateway;

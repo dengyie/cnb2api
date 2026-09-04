@@ -1,10 +1,36 @@
 # Setting up cnb2api on CNB (from zero)
 
-This is the CNB side of the setup: create the repo, wire the secrets, boot the
-workspace, and verify. The optional fixed-domain relay lives on your own VPS —
-see [DEPLOY.md](DEPLOY.md) for that part.
+This is the CNB side of the setup: get the repo into your org, set one key,
+boot the workspace, and verify. The optional fixed-domain relay lives on your
+own VPS — see [DEPLOY.md](DEPLOY.md) for that part.
 
-Time budget: ~10 minutes if you already have a CNB account with AI credits.
+Time budget: ~5 minutes on the fast path, ~10 with the secrets repo.
+
+## Fast path (3 steps)
+
+For a private fork, the only value you must supply is your own `PROXY_KEY` —
+the keepalive needs no edits because it reads the built-in `CNB_REPO_SLUG`:
+
+1. **Fork this repo into your org, private** (or create a private repo and
+   push the contents). A private fork keeps your key inlined in `.cnb.yml`
+   safely — it's your own repo.
+2. **Set your key**: in `.cnb.yml`, replace the placeholder in the vscode
+   stage's `env:` block, e.g. with `openssl rand -hex 24` output. Never ship
+   the placeholder value itself.
+3. **Start 云开发 (cloud dev)** on the repo page. The build log prints your
+   endpoint:
+
+   ```
+   PROXY_URI=https://<subdomain>-9001.cnb.run
+   ```
+
+   That's your base URL (`/v1`) and the key from step 2 is your API key.
+   The 5-minute keepalive cron starts on the next cron tick — nothing else
+   to configure.
+
+Outgrown the fast path (team use, or you want the fixed domain)? Switch to
+the secrets-repo flow below — delete the inline `env:` line, uncomment
+`imports:`, and follow sections 2–3.
 
 ## Prerequisites
 
@@ -29,14 +55,14 @@ Watch usage under *org → settings → usage*.
 
 ## 1. Create the code repo
 
-Create a **private** repo under your org (e.g. `your-org/cnb2api`) and push the
-contents of this project to it. Private is fine — CNB builds private repos the
-same way.
+The fast path above IS this step (private fork). You only need the sections
+below if you skipped it or want the secrets-repo flow.
 
 ## 2. Create the secrets repo
 
 CNB can inject env vars into pipelines from another repo's YAML file via
-`imports:`. Keep every real credential there, never in the code repo.
+`imports:`. Keeping every real credential in its own repo — rather than
+inlined in the code repo — is the cleaner layout for teams or public forks.
 
 1. Create a second **private** repo, e.g. `your-org/cnb2api-secrets`.
 2. Add a `proxy.yml` at its root:
@@ -54,17 +80,16 @@ CNB can inject env vars into pipelines from another repo's YAML file via
 
 ## 3. Edit `.cnb.yml` in the code repo
 
-Three spots, all marked with comments:
-
 | Where | What to set |
 |---|---|
-| `main:` → keepalive `env:` | `REPO: your-org/cnb2api`; `FIXED:` your `https://…/health` URL (or comment the line out to skip the HTTP probe) |
 | both `imports:` stanzas | `https://cnb.cool/your-org/cnb2api-secrets/-/blob/main/proxy.yml` |
+| vscode `env:` | delete the inline `PROXY_KEY` (it now comes from the secrets repo) |
 | (secrets repo) | `PROXY_MODELS: "model-x,model-y"` if your models differ |
 
-Note the keepalive cron lives under the `main:` branch key — if your default
-branch is not `main`, either rename the key or the branch, or the cron never
-fires.
+`REPO` for the keepalive needs no edit either way — it reads the built-in
+`CNB_REPO_SLUG`. Note the keepalive cron lives under the `main:` branch key —
+if your default branch is not `main`, either rename the key or the branch, or
+the cron never fires.
 
 ## 4. Boot the workspace
 

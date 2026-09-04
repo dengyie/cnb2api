@@ -27,8 +27,7 @@ Usage:
   cnb2api-quota [--org <org>] [--json | --line]
 
 Options:
-  --org <org>   Org slug to query. Defaults to the org part of
-                CNB_REPO_SLUG / CNB_BUILD_REPO.
+  --org <org>   Org slug to query. Defaults to the org part of CNB_REPO_SLUG.
   --json        Print the normalized snapshot as JSON.
   --line        Print a compact one-line summary (good for prompts/status bars).
   -h, --help    Show this help.
@@ -43,7 +42,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.mode === 'help') { process.stdout.write(HELP); return; }
 
-  const slug = process.env.CNB_REPO_SLUG || process.env.CNB_BUILD_REPO || '';
+  const slug = process.env.CNB_REPO_SLUG || '';
   const org = args.org || process.env.QUOTA_ORG || slug.split('/')[0] || '';
   const token = process.env.CNB_TOKEN || '';
 

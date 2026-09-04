@@ -89,14 +89,12 @@ client ──https://ai.example.com/v1──▶ 固定域名(自建 relay / ngin
 
 ## 快速开始 —— 部署到 CNB
 
-**完整流程见 [docs/SETUP.md](docs/SETUP.md)**——从零到一个验证过的端点约 10
-分钟(建代码仓 → 带 `allow_slugs` 的密钥仓 → 改 `.cnb.yml` → 启动工作区 →
-端到端验证,附排障表)。
-
-你需要:一个 org 已开通 AI 额度的 CNB 账号,以及你自己的模型 id(填
-`PROXY_MODELS`)。想要重启自动跟随的可选固定公网域名,按
-[docs/DEPLOY.md](docs/DEPLOY.md) 部署 nginx 中继。每个配置项见
-[`.env.example`](.env.example) 与下方[配置](#配置)表。
+三步,只填一个值。**私有 fork** 本仓,把自己的 key 填进 `.cnb.yml` 的 `env:`
+块(私有仓里内联是安全的,可用 `openssl rand -hex 24` 生成),再启动云开发
+工作区。构建日志会打印端点(`PROXY_URI=https://<子域名>-9001.cnb.run`)——
+它加上你的 key 就是一个能用的 OpenAI base URL。其余零改动:keepalive 读的
+是内置变量 `CNB_REPO_SLUG`,无需任何按用户配置。完整流程(含团队级的密钥仓
+方案、可选固定域名中继)见 [docs/SETUP.md](docs/SETUP.md)。
 
 ## 你实际能得到什么
 
@@ -220,7 +218,7 @@ curl http://127.0.0.1:9001/v1/chat/completions \
 |-----|---------|---------|
 | `PROXY_KEY` | —(必填) | 客户端必须携带的 Bearer key。无默认值;缺失拒绝启动。 |
 | `CNB_TOKEN` | —(必填) | 上游令牌;由 CNB 流水线阶段自动注入。 |
-| `CNB_REPO_SLUG` | `CNB_BUILD_REPO` | 拼上游 URL 用的 `org/repo`。工作区内自动填充。 |
+| `CNB_REPO_SLUG` | (内置) | 拼上游 URL 用的 `org/repo`。CNB 内置变量,所有流水线自动填充。 |
 | `PROXY_MODELS` | `deepseek-v4-flash,glm-5.3-flash,kimi-k3` | `/v1/models` 展示的模型 id 列表。 |
 | `PROXY_PORT` | `9001` | 监听端口。 |
 | `PROXY_UPSTREAM_TIMEOUT_MS` | `15000` | 上游连接 / 首字节超时。 |
