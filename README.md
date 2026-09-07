@@ -86,6 +86,12 @@ extra infrastructure. Design details: [docs/DESIGN.md](docs/DESIGN.md).
 
 - **OpenAI-compatible** — `/v1/chat/completions` (streaming SSE + non-streaming),
   `/v1/models`, `/health`. Native **function/tool calls** pass through untouched.
+- **Anthropic-compatible too** — `/v1/messages` (+`/v1/messages/count_tokens`)
+  speaks the Anthropic Messages protocol, so **Claude Code connects directly**:
+  set `ANTHROPIC_BASE_URL` and go. Request/response translation covers system
+  prompts (top-level and in-messages), text/image/thinking blocks, `tool_use`/
+  `tool_result`, and the full streaming event sequence
+  (`message_start → content_block_* → message_delta → message_stop`).
 - **Faithful non-stream aggregation** — reassembles `content`, incremental
   `tool_calls`, `reasoning_content`, `usage`, and `finish_reason` from the SSE
   stream into one complete `chat.completion` object.
@@ -93,6 +99,9 @@ extra infrastructure. Design details: [docs/DESIGN.md](docs/DESIGN.md).
   backpressure handling, and two-way cancellation (a client disconnect aborts the
   upstream, so you stop burning credits on an abandoned request).
 - **Timing-safe key auth** — with a sliding-window failure limiter (429 on abuse).
+  Both `Authorization: Bearer` and Anthropic's `x-api-key` headers work.
+- **Usage endpoint** — authenticated `GET /usage` returns per-boot token totals
+  (`prompt`/`completion`/`requests`/`errors`) for external monitoring.
 - **Quota dashboard CLI** — `cnb2api-quota` reads CNB's charge API directly; see
   [below](#quota-dashboard-cli).
 
@@ -172,6 +181,14 @@ custom base URL just works. Point the base URL at your fixed domain
 - **Chat UIs** — LobeChat, Cherry Studio, Open WebUI, NextChat…
 - **Coding agents / SDKs** — Codex CLI, the official `openai` SDK, or any
   OpenAI-compatible toolchain.
+- **Claude Code** — native Anthropic protocol, no shim needed:
+
+  ```bash
+  ANTHROPIC_BASE_URL=https://ai.example.com \
+  ANTHROPIC_AUTH_TOKEN=<your PROXY_KEY> \
+  ANTHROPIC_MODEL=deepseek-v4-flash \
+  claude -p "hello"
+  ```
 - **curl** — see [Local development](#local-development).
 
 ## Quota dashboard (CLI)
@@ -268,8 +285,13 @@ Yes. Requests go through the official endpoint with your pipeline token, so
 `/health`. No embeddings/audio/files — the upstream doesn't offer them either.
 
 **Does it work with Anthropic-format clients?**
-Not directly — this is an OpenAI-compatible shim. Use a client that speaks the
-OpenAI format (most chat UIs and agents do).
+Yes — `/v1/messages` implements the Anthropic Messages protocol end to end
+(request translation, streaming event sequence, `count_tokens` estimate, and
+Anthropic-style error envelopes). Claude Code connects directly via
+`ANTHROPIC_BASE_URL`. Two model-specific notes: `thinking` blocks are dropped
+on the way in and not synthesized on the way out (the upstream has no matching
+concept), and `count_tokens` is a characters/4 estimate — fine for context
+percentages, not an exact count.
 
 **What does running it cost?**
 The code is MIT and free. You spend your CNB allowance: AI credits per request,

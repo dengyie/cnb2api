@@ -79,12 +79,20 @@ client ──https://ai.example.com/v1──▶ 固定域名(自建 relay / ngin
 
 - **OpenAI 兼容**——`/v1/chat/completions`(流式 SSE + 非流式)、`/v1/models`、
   `/health`。原生**函数/工具调用**原样透传。
+- **Anthropic 兼容**——`/v1/messages`(含 `/v1/messages/count_tokens`)完整实现
+  Anthropic Messages 协议,**Claude Code 直连**:`ANTHROPIC_BASE_URL` 一设就能用。
+  请求/响应翻译覆盖 system 提示(顶级与 messages 内)、text/image/thinking 块、
+  `tool_use`/`tool_result`,以及完整流式事件序列
+  (`message_start → content_block_* → message_delta → message_stop`)。
 - **忠实的非流式聚合**——把 SSE 流里的 `content`、增量 `tool_calls`、
   `reasoning_content`、`usage`、`finish_reason` 重组成一个完整的
   `chat.completion` 对象。
 - **生产级加固转发**——连接超时、流级空闲看门狗、背压处理、双向取消(客户端
   断开会中止上游,不再为已放弃的请求烧额度)。
-- **时序安全的 key 鉴权**——配滑动窗口失败限流(滥用回 429)。
+- **时序安全的 key 鉴权**——配滑动窗口失败限流(滥用回 429)。`Authorization:
+  Bearer` 与 Anthropic 的 `x-api-key` 两种头等价。
+- **用量端点**——鉴权 `GET /usage` 返回按 boot 的 token 累计
+  (`prompt`/`completion`/`requests`/`errors`),方便外部监控对接。
 - **额度看板 CLI**——`cnb2api-quota` 直连 CNB charge 接口,见[下文](#额度看板cli)。
 
 ## 快速开始 —— 部署到 CNB
@@ -154,6 +162,14 @@ credits 约合 **2 亿 tokens/月**。别把任何单一数字当承诺:用下�
 
 - **聊天客户端**——LobeChat、Cherry Studio、Open WebUI、NextChat……
 - **编码 Agent / SDK**——Codex CLI、官方 `openai` SDK,或任何 OpenAI 兼容工具链。
+- **Claude Code**——原生 Anthropic 协议,无需任何 shim:
+
+  ```bash
+  ANTHROPIC_BASE_URL=https://ai.example.com \
+  ANTHROPIC_AUTH_TOKEN=<你的 PROXY_KEY> \
+  ANTHROPIC_MODEL=deepseek-v4-flash \
+  claude -p "hello"
+  ```
 - **curl**——见[本地开发](#本地开发)。
 
 ## 额度看板(CLI)
@@ -243,12 +259,16 @@ curl http://127.0.0.1:9001/v1/chat/completions \
 ——不需要任何提示词注入的绕行手段。
 
 **实现了哪些 API 端点?**
-`/v1/chat/completions`(SSE 流式 + 非流式)、`/v1/models`、`/health`。没有
+`/v1/chat/completions`(SSE 流式 + 非流式)、`/v1/messages`(含
+`count_tokens`)、`/v1/models`、`/usage`、`/health`。没有
 embeddings/audio/files——上游本身也不提供。
 
 **支持 Anthropic 格式的客户端吗?**
-不直接支持——这是个 OpenAI 兼容 shim。用说 OpenAI 格式的客户端即可(大多数
-聊天客户端和 Agent 都是)。
+支持——`/v1/messages` 端到端实现 Anthropic Messages 协议(请求翻译、流式事件
+序列、`count_tokens` 估算、Anthropic 风格错误 envelope)。Claude Code 设
+`ANTHROPIC_BASE_URL` 即可直连。两个模型相关的边界:`thinking` 块入站丢弃、
+出站不合成(上游无对应概念);`count_tokens` 是字符数/4 的估算——做上下文
+百分比够用,不是精确值。
 
 **跑起来要花什么成本?**
 代码是 MIT 免费的。你花的是 CNB 额度:每次请求的 AI credits,加上保活撑开

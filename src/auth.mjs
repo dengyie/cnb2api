@@ -9,9 +9,14 @@ function prune(now) {
 }
 
 export function checkAuth(req) {
+  // OpenAI 客户端用 Authorization: Bearer；Anthropic 客户端（claude code）用 x-api-key。
+  // 两种头都接受，恒时比较不变。
   const auth = req.headers.authorization || '';
+  const xapiKey = req.headers['x-api-key']
+    ? `Bearer ${req.headers['x-api-key']}` : '';
   const expected = `Bearer ${config.proxyKey}`;
-  const ok = auth.length === expected.length && crypto.timingSafeEqual(Buffer.from(auth), Buffer.from(expected));
+  const candidate = auth || xapiKey;
+  const ok = candidate.length === expected.length && crypto.timingSafeEqual(Buffer.from(candidate), Buffer.from(expected));
   if (ok) return { ok: true };
 
   const now = Date.now();
