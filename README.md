@@ -289,9 +289,10 @@ Yes — `/v1/messages` implements the Anthropic Messages protocol end to end
 (request translation, streaming event sequence, `count_tokens` estimate, and
 Anthropic-style error envelopes). Claude Code connects directly via
 `ANTHROPIC_BASE_URL`. Two model-specific notes: `thinking` blocks are dropped
-on the way in and not synthesized on the way out (the upstream has no matching
-concept), and `count_tokens` is a characters/4 estimate — fine for context
-percentages, not an exact count.
+on the way in and passed through on the way out (from upstream
+`reasoning_content`), and `count_tokens` is a characters/4 estimate — fine for
+context percentages, not an exact count. The protocol adapter is maintained
+against a production deployment first; this repo tracks it.
 
 **What does running it cost?**
 The code is MIT and free. You spend your CNB allowance: AI credits per request,

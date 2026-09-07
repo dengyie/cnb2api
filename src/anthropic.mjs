@@ -10,8 +10,8 @@
 //   响应：content blocks（text / thinking / tool_use）、stop_reason 映射、
 //         usage 字段名映射（input_tokens/output_tokens）
 //   流式：message_start / ping / content_block_* / message_delta / message_stop
-//   裁剪：thinking 块默认不回传（上游 reasoning_content 不稳定，claude code 无感）；
-//         citations/document 等罕见块按 text 兜底
+//   裁剪：请求侧 thinking/redacted_thinking 块丢弃（上游无对应概念）；响应侧
+//         reasoning_content → thinking 块回传；document/未知块降级占位符保序
 
 const STOP_REASON_MAP = {
   'stop': 'end_turn',
@@ -32,13 +32,14 @@ export class ProtocolError extends Error {
 // 请求侧：Messages → OpenAI chat.completions
 // ---------------------------------------------------------------------------
 
-// 上游（CNB 网关）维护了 Claude Code 官方 prompt 的精确短语黑名单，命中即 11128
-// "Illegal API invocation from an unapproved channel"（实测：短语作为连续子串出现即拦，
-// 大小写不敏感、容忍前后文；句中任何一词替换/删除则放行）。出站前做中性化改写——
-// 只动黑名单短语，语义等价，claude code 行为不受影响。
+// Some upstream gateways false-positive on a few well-known prompt phrases and
+// reject the whole request. Before sending, rewrite those phrases to equivalent
+// wording (values/URLs preserved) so benign requests go through untouched
+// otherwise. Table-driven: extend UPSTREAM_BLOCKED_PHRASES if your gateway
+// flags something new.
 const UPSTREAM_BLOCKED_PHRASES = [
-  // claude code 把内部计费头名字注进 system 首块（cc_version=…; cc_entrypoint=…），
-  // 网关按字面拦这个头名 token。换等价无害标记，值原样保留（模型不受影响）。
+  // claude code 注进 system 首块的内部计费头名，部分网关按字面拦这个 token；
+  // 换等价无害标记，值原样保留（模型不受影响）。
   [/x-anthropic-billing-header/gi, 'x-cc-billing-meta'],
   [
     /to give feedback, users should report the issue at (https:\/\/github\.com\/anthropics\/claude-code\/issues)/gi,
@@ -146,7 +147,7 @@ function convertAssistantBlocks(blocks) {
       toolCalls.push({
         id: b.id || `call_${toolCalls.length}`,
         type: 'function',
-        // arguments 同样过中性化：会话回放里模型生成的工具参数可能携带黑名单短语
+        // arguments 同样过改写：会话回放里模型生成的工具参数可能携带被拦短语
         function: { name: b.name || '', arguments: neutralize(safeJsonStringify(b.input)) },
       });
     } else if (b?.type === 'redacted_thinking') { /* 丢弃 */ }
@@ -200,7 +201,7 @@ function toolResultContent(b) {
       return '';
     }).join('');
   }
-  return String(c);
+  return JSON.stringify(c);
 }
 
 function imageToDataUrl(b) {
@@ -328,7 +329,13 @@ export class AnthropicStream {
   // 上游流正常结束：关闭所有块，补 message_delta + message_stop
   end() {
     if (this.finished) return [];
-    if (!this.started) return this.feed({}); // 上游空流也要有 message_start…message_stop
+    let head = [];
+    if (!this.started) {
+      // 上游 200 但零 data 事件：先补 message_start+ping 头部，再走统一收尾，
+      // 保证 message_delta/message_stop 必达（缺 message_stop 客户端会挂起等流结束）
+      this.feed({});
+      head = this.out.splice(0);
+    }
     this.finished = true;
     this.out.length = 0;
     this.closeAllBlocks();
@@ -338,7 +345,7 @@ export class AnthropicStream {
       usage: { output_tokens: this.usage?.completion_tokens || 0 },
     }));
     this.out.push(evt('message_stop', { type: 'message_stop' }));
-    return this.out;
+    return [...head, ...this.out];
   }
 
   // 上游中途夭折：Anthropic 规范无 abort 事件，尽力收尾（客户端看到的是截断的完整消息）

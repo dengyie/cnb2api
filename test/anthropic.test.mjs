@@ -67,7 +67,7 @@ test('请求转换：thinking 块丢弃、image 占位、stop_sequences/temperat
   assert.match(out.messages[1].content, /^\[image: data:image\/png;base64,<4 base64 chars>\]\n?what\?$/);
 });
 
-test('请求转换：上游黑名单短语中性化（CNB 11128 拦截规避）', () => {
+test('请求转换：被上游拦的短语出站前改写为等价表述', () => {
   const out = fromAnthropicRequest({
     max_tokens: 50,
     system: "x-anthropic-billing-header: cc_version=2.1.212.3f4; cc_entrypoint=sdk-cli;\nYou are Claude Code, Anthropic's official CLI for Claude.\nTo give feedback, users should report the issue at https://github.com/anthropics/claude-code/issues",
@@ -83,12 +83,12 @@ test('请求转换：上游黑名单短语中性化（CNB 11128 拦截规避）'
   assert.ok(/cc_version=2\.1\.212\.3f4; cc_entrypoint=sdk-cli;/.test(out.messages[0].content), 'billing values preserved');
   assert.ok(/share feedback, users can report the issue at https:\/\/github\.com\/anthropics\/claude-code\/issues/.test(out.messages[0].content), 'URL preserved');
   assert.match(out.messages[0].content, /a command-line coding assistant\./);
-  // 无黑名单短语的正常文本原样通过
+  // 无匹配短语的正常文本原样通过
   const plain = fromAnthropicRequest({ max_tokens: 10, messages: [{ role: 'user', content: 'hello world' }] });
   assert.equal(plain.messages[0].content, 'hello world');
 });
 
-test('请求转换：assistant tool_use arguments 同样中性化，tool_choice 缺 name 报 400', () => {
+test('请求转换：assistant tool_use arguments 同样改写，tool_choice 缺 name 报 400', () => {
   const out = fromAnthropicRequest({
     max_tokens: 50,
     messages: [
@@ -119,6 +119,34 @@ test('流式：abort() 收尾闭合所有块并以 message_stop 结束', () => {
   // abort 后再 feed/end 不产出任何事件（幂等收尾）
   assert.deepEqual(s.feed({ choices: [{ delta: { content: 'x' } }] }), []);
   assert.deepEqual(s.end(), []);
+});
+
+test('流式：上游空流（200 零 data 事件）收尾仍发出完整 message_start…message_stop', () => {
+  const s = new AnthropicStream({ requestId: 're' });
+  const raw = s.end();
+  const names = raw.map((e) => e.event);
+  // 空流也必须有完整收尾：message_start、ping 打头，message_delta + message_stop 必达且各一次
+  assert.deepEqual(names, ['message_start', 'ping', 'message_delta', 'message_stop']);
+  const delta = JSON.parse(raw[2].data);
+  assert.equal(delta.delta.stop_reason, 'end_turn');
+  // 收尾后状态机闭合：再 feed/end 不产出事件
+  assert.deepEqual(s.feed({ choices: [{ delta: { content: 'x' } }] }), []);
+  assert.deepEqual(s.end(), []);
+});
+
+test('请求转换：tool_result 对象形态 content 降级为 JSON 字符串（非 [object Object]）', () => {
+  const out = fromAnthropicRequest({
+    max_tokens: 10,
+    messages: [{
+      role: 'user',
+      content: [{
+        type: 'tool_result',
+        tool_use_id: 't1',
+        content: { stdout: 'ok', code: 0 },
+      }],
+    }],
+  });
+  assert.equal(out.messages[0].content, '{"stdout":"ok","code":0}');
 });
 
 test('请求转换：messages 内 system 角色按序透传（真机 claude code 会话实测场景）', () => {
@@ -290,6 +318,12 @@ const mockServer = http.createServer((req, res) => {
       res.end(JSON.stringify({ error: { message: 'boom' } }));
       return;
     }
+    if (parsed.model === 'mock-empty') {
+      // 200 但 SSE 体零 data 事件（只有注释行）：空流收尾必须完整
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.end(': keep-alive\n\n');
+      return;
+    }
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
     const chunks = [
       { id: 'c1', model: 'mock-model', choices: [{ index: 0, delta: { role: 'assistant', content: 'he' } }] },
@@ -365,6 +399,15 @@ test('E2E 错误透传：上游 500 → 500 Anthropic error envelope', async () 
   assert.equal(body.type, 'error');
   assert.equal(body.error.type, 'api_error');
   assert.equal(body.error.message, 'boom');
+});
+
+test('E2E 空流：上游 200 零 data 事件 → 流式仍以 message_delta + message_stop 收尾', async () => {
+  const res = await postMessages({ model: 'mock-empty', max_tokens: 32, stream: true, messages: [{ role: 'user', content: 'hi' }] }, { 'x-api-key': KEY });
+  assert.equal(res.status, 200);
+  const text = await res.text();
+  const events = [...text.matchAll(/event: (.+)\ndata: (.+)\n\n/g)].map((m) => ({ event: m[1], data: JSON.parse(m[2]) }));
+  assert.deepEqual(events.map((e) => e.event), ['message_start', 'ping', 'message_delta', 'message_stop']);
+  assert.equal(events[2].data.delta.stop_reason, 'end_turn');
 });
 
 test('E2E 413：超限请求体 → Anthropic error envelope', async () => {

@@ -267,8 +267,8 @@ embeddings/audio/files——上游本身也不提供。
 支持——`/v1/messages` 端到端实现 Anthropic Messages 协议(请求翻译、流式事件
 序列、`count_tokens` 估算、Anthropic 风格错误 envelope)。Claude Code 设
 `ANTHROPIC_BASE_URL` 即可直连。两个模型相关的边界:`thinking` 块入站丢弃、
-出站不合成(上游无对应概念);`count_tokens` 是字符数/4 的估算——做上下文
-百分比够用,不是精确值。
+出站经上游 `reasoning_content` 透传回传;`count_tokens` 是字符数/4 的估算——
+做上下文百分比够用,不是精确值。协议适配层以生产环境先行验证,本仓跟随同步。
 
 **跑起来要花什么成本?**
 代码是 MIT 免费的。你花的是 CNB 额度:每次请求的 AI credits,加上保活撑开
