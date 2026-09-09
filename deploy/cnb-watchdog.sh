@@ -21,9 +21,10 @@ LOG="${CNB_WATCHDOG_LOG:-/var/log/cnb-watchdog.log}"
 STATE_FILE="${CNB_WATCHDOG_STATE:-/tmp/cnb-watchdog-fails}"
 REPO="${CNB_REPO:-}"
 FIXED="${FIXED_URL:-https://127.0.0.1:9001/health}"
-THRESH="${CNB_THRESH:-3}"          # Consecutive fail threshold (3x5m ≈ 15 min)
-TG_COOLDOWN="${TG_COOLDOWN:-3600}"  # Telegram alert cooldown in seconds
-FB_COOLDOWN="${FB_COOLDOWN:-1800}"  # Fallback dispatch cooldown (30 min)
+THRESH_FALLBACK="${CNB_THRESH_FALLBACK:-3}"  # 3 fails (15 min): trigger silent fallback
+THRESH_ALERT="${CNB_THRESH_ALERT:-4}"        # 4 fails (20 min): alert only if fallback failed
+TG_COOLDOWN="${TG_COOLDOWN:-3600}"          # Telegram alert cooldown in seconds
+FB_COOLDOWN="${FB_COOLDOWN:-1800}"          # Fallback dispatch cooldown (30 min)
 
 log() { echo "[$(date '+%F %T')] $*" >> "$LOG"; }
 [ -f "$LOG" ] && [ "$(stat -c%s "$LOG" 2>/dev/null || echo 0)" -gt 5242880 ] && mv -f "$LOG" "$LOG.1"
@@ -67,33 +68,35 @@ case "$H" in
   *'"status":"ok"'*)
     echo 0 > "$STATE_FILE"
     if [ -f "${STATE_FILE}.alerted" ]; then
-      log "RECOVERED: fixed domain is healthy again"
+      log "RECOVERED: fixed domain is healthy again (notified user)"
       rm -f "${STATE_FILE}.alerted" "${STATE_FILE}.tg" "${STATE_FILE}.fallback"
       tg_send "✅ cnb2api is healthy again: $FIXED passed check"
     else
-      log "OK: healthy"
+      # Recovered silently without bothering user
+      log "OK: healthy (silent)"
+      rm -f "${STATE_FILE}.fallback" 2>/dev/null || true
     fi
     exit 0
     ;;
   *)
     FAILS=$(( $(cat "$STATE_FILE" 2>/dev/null || echo 0) + 1 ))
     echo "$FAILS" > "$STATE_FILE"
-    if [ "$FAILS" -ge "$THRESH" ]; then
+
+    # Step 1: At 15 min, dispatch silent fallback start to give it a recovery window
+    if [ "$FAILS" -ge "$THRESH_FALLBACK" ]; then
+      FB_RES=$(try_fallback_start || true)
+    fi
+
+    # Step 2: At >=20 min, if still failing, both self-healing and fallback failed -> alert human!
+    if [ "$FAILS" -ge "$THRESH_ALERT" ]; then
       last=0
       [ -f "${STATE_FILE}.tg" ] && last=$(cat "${STATE_FILE}.tg" 2>/dev/null || echo 0)
       now=$(date +%s)
-
-      FB_MSG=""
-      FB_RES=$(try_fallback_start || true)
-      if [ -n "$FB_RES" ]; then
-        FB_MSG=" (fallback trigger dispatched)"
-      fi
-
       if [ $((now - last)) -ge "$TG_COOLDOWN" ]; then
         echo "$now" > "${STATE_FILE}.tg"
         touch "${STATE_FILE}.alerted"
-        log "ALERT: failing x$FAILS (~$((FAILS * 5)) min) — triggered fallback"
-        tg_send "🔴 cnb2api endpoint down for ~$((FAILS * 5)) min ($FIXED).$FB_MSG"
+        log "ALERT: failing x$FAILS (~$((FAILS * 5)) min) — fallback did not recover, need human"
+        tg_send "🔴 cnb2api endpoint persistent failure ~$((FAILS * 5)) min ($FIXED). Both cron self-healing and external fallback failed to recover."
       else
         log "ALERT: failing x$FAILS (alert cooldown)"
       fi
