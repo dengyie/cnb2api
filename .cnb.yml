@@ -18,6 +18,10 @@
 # domain. Uses the pipeline's temporary CNB_TOKEN (auto-issued per run).
 # This block lives under the `main:` branch key — if your default branch is
 # not `main`, rename the key (or your branch) or the cron never fires.
+# NOTE ON CRON DORMANCY: Most CI platforms (including CNB) may pause recurring
+# cron schedules if a repository has no git commits for several consecutive days.
+# To prevent dormancy, occasionally push a commit or pair this with the external
+# fallback watchdog in `deploy/cnb-watchdog.sh` on your relay host.
 # Set REPO automatically: CNB_REPO_SLUG is a built-in variable (org/repo) present
 # in every pipeline, so the keepalive needs no per-user edits. Uncomment FIXED
 # with your fixed-domain health URL to enable the HTTP probe + fake-death

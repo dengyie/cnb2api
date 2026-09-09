@@ -1,0 +1,94 @@
+#!/bin/bash
+# cnb2api external watchdog script (v5.1 dual-watchdog architecture)
+#
+# Usage:
+#   Run this via host crontab (e.g. `*/5 * * * * /path/to/cnb-watchdog.sh`)
+#   on your relay VPS / server to probe your fixed domain.
+#
+# Environment variables (or define them in /etc/cnb-watchdog.env):
+#   CNB_REPO          CNB repo slug, e.g. "my-org/ai-proxy" (required for fallback)
+#   FIXED_URL         Full health URL, e.g. "https://ai.example.com/health"
+#   FALLBACK_TOKEN    Personal access token or file path containing token (optional)
+#   TG_BOT_TOKEN      Telegram Bot token for failure alerts (optional)
+#   TG_CHAT_ID        Telegram Chat ID for alerts (optional)
+#
+set -uo pipefail
+
+ENV_FILE="${CNB_WATCHDOG_ENV:-/etc/cnb-watchdog.env}"
+[ -f "$ENV_FILE" ] && . "$ENV_FILE"
+
+LOG="${CNB_WATCHDOG_LOG:-/var/log/cnb-watchdog.log}"
+STATE_FILE="${CNB_WATCHDOG_STATE:-/tmp/cnb-watchdog-fails}"
+REPO="${CNB_REPO:-}"
+FIXED="${FIXED_URL:-https://127.0.0.1:9001/health}"
+THRESH="${CNB_THRESH:-3}"          # Consecutive fail threshold (3x5m ≈ 15 min)
+TG_COOLDOWN="${TG_COOLDOWN:-3600}"  # Telegram alert cooldown in seconds
+
+log() { echo "[$(date '+%F %T')] $*" >> "$LOG"; }
+[ -f "$LOG" ] && [ "$(stat -c%s "$LOG" 2>/dev/null || echo 0)" -gt 5242880 ] && mv -f "$LOG" "$LOG.1"
+
+tg_send() {
+  [ -n "${TG_BOT_TOKEN:-}" ] && [ -n "${TG_CHAT_ID:-}" ] || return 0
+  curl -s --max-time 10 "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+      --data-urlencode "chat_id=${TG_CHAT_ID}" \
+      --data-urlencode "text=$1" >/dev/null \
+    || log "WARN: telegram push failed"
+}
+
+try_fallback_start() {
+  local token="${FALLBACK_TOKEN:-}"
+  [ -f "$token" ] && token=$(cat "$token" 2>/dev/null || true)
+  if [ -n "$token" ] && [ -n "$REPO" ]; then
+    log "FALLBACK: triggering workspace/start via OpenAPI..."
+    local resp
+    resp=$(curl -s --max-time 30 -X POST "https://api.cnb.cool/$REPO/-/workspace/start" \
+      -H "Authorization: Bearer $token" \
+      -H "Content-Type: application/json" \
+      -d '{"branch":"main"}' || true)
+    log "FALLBACK: response: $resp"
+    echo "$resp"
+    return 0
+  fi
+  return 1
+}
+
+H=$(curl -s --max-time 20 "$FIXED" || true)
+case "$H" in
+  *'"status":"ok"'*)
+    echo 0 > "$STATE_FILE"
+    if [ -f "${STATE_FILE}.alerted" ]; then
+      log "RECOVERED: fixed domain is healthy again"
+      rm -f "${STATE_FILE}.alerted" "${STATE_FILE}.tg"
+      tg_send "✅ cnb2api is healthy again: $FIXED passed check"
+    else
+      log "OK: healthy"
+    fi
+    exit 0
+    ;;
+  *)
+    FAILS=$(( $(cat "$STATE_FILE" 2>/dev/null || echo 0) + 1 ))
+    echo "$FAILS" > "$STATE_FILE"
+    if [ "$FAILS" -ge "$THRESH" ]; then
+      last=0
+      [ -f "${STATE_FILE}.tg" ] && last=$(cat "${STATE_FILE}.tg" 2>/dev/null || echo 0)
+      now=$(date +%s)
+
+      FB_MSG=""
+      FB_RES=$(try_fallback_start || true)
+      if [ -n "$FB_RES" ]; then
+        FB_MSG=" (fallback trigger dispatched)"
+      fi
+
+      if [ $((now - last)) -ge "$TG_COOLDOWN" ]; then
+        echo "$now" > "${STATE_FILE}.tg"
+        touch "${STATE_FILE}.alerted"
+        log "ALERT: failing x$FAILS (~$((FAILS * 5)) min) — triggered fallback"
+        tg_send "🔴 cnb2api endpoint down for ~$((FAILS * 5)) min ($FIXED).$FB_MSG"
+      else
+        log "ALERT: failing x$FAILS (alert cooldown)"
+      fi
+    else
+      log "WARN: fail #$FAILS"
+    fi
+    ;;
+esac

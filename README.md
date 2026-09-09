@@ -76,6 +76,10 @@ every 5 min (cron pipeline)          on every boot                 your relay
 - **No long-lived tokens on disk** — a recycled workspace carries nothing; the
   next boot mints a fresh `CNB_TOKEN` by design. Your `PROXY_KEY` and
   `REG_TOKEN` live in a private secrets repo, injected at build time.
+- **Dual-watchdog fallback (optional)** — if the platform pauses the cron pipeline
+  due to inactivity (zero commits over several days), `deploy/cnb-watchdog.sh` on
+  your relay VPS can automatically trigger `workspace/start` using a backup token,
+  waking the workspace without human intervention.
 
 This is HA at the **service** level, not the instance level: the stable URL and
 working proxy survive recycles automatically. The cost is a couple of minutes of
