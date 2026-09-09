@@ -56,9 +56,19 @@ try_fallback_start() {
       -H "Content-Type: application/json" \
       -d '{"branch":"main"}' || true)
     log "FALLBACK: response: $resp"
-    echo "$now" > "${STATE_FILE}.fallback"
-    echo "$resp"
-    return 0
+
+    # Only set cooldown lock if response contains valid instance identifier
+    case "$resp" in
+      *'"sn":'*)
+        echo "$now" > "${STATE_FILE}.fallback"
+        log "FALLBACK: workspace launch dispatched successfully, cooling down ${FB_COOLDOWN}s"
+        return 0
+        ;;
+      *)
+        log "WARN: fallback workspace/start returned unexpected response (not cooling down)"
+        return 1
+        ;;
+    esac
   fi
   return 1
 }
@@ -84,7 +94,7 @@ case "$H" in
 
     # Step 1: At 15 min, dispatch silent fallback start to give it a recovery window
     if [ "$FAILS" -ge "$THRESH_FALLBACK" ]; then
-      FB_RES=$(try_fallback_start || true)
+      try_fallback_start >/dev/null 2>&1 || true
     fi
 
     # Step 2: At >=20 min, if still failing, both self-healing and fallback failed -> alert human!
