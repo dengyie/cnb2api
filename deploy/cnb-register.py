@@ -26,9 +26,10 @@ LISTEN_PORT = int(os.environ.get('REGISTER_PORT', '9003'))
 UPSTREAM_PORT = os.environ.get('UPSTREAM_PORT', '9001')
 
 TOKEN = ''
-for line in open(ENV_FILE):
-    if line.startswith('REG_TOKEN='):
-        TOKEN = line.split('=', 1)[1].strip().strip('"')
+if os.path.exists(ENV_FILE):
+    for line in open(ENV_FILE):
+        if line.startswith('REG_TOKEN='):
+            TOKEN = line.split('=', 1)[1].strip().strip('"').strip("'")
 
 # CNB_VSCODE_PROXY_URI looks like https://<subdomain>-{{port}}.cnb.run or https://<subdomain>-<port>.cnb.run
 URI_RE = re.compile(r'^https://([a-z0-9]+)-(?:\{\{port\}\}|[0-9]+)\.cnb\.run$')
@@ -37,6 +38,8 @@ URI_RE = re.compile(r'^https://([a-z0-9]+)-(?:\{\{port\}\}|[0-9]+)\.cnb\.run$')
 def switch(sub):
     new = "map $request_uri $cnb_ai_upstream { default %s-%s.cnb.run:443; }\n" % (sub, UPSTREAM_PORT)
     try:
+        conf_dir = os.path.dirname(os.path.abspath(CONF))
+        os.makedirs(conf_dir, exist_ok=True)
         cur = open(CONF).read()
     except OSError:
         # First registration before the map file was seeded: start from an empty
@@ -65,7 +68,8 @@ def switch(sub):
 
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
-        if not hmac.compare_digest(self.headers.get('X-Reg-Token', ''), TOKEN):
+        token_hdr = self.headers.get('X-Reg-Token', '')
+        if not TOKEN or not token_hdr or not hmac.compare_digest(token_hdr, TOKEN):
             self.send_response(403); self.end_headers(); return
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
@@ -75,7 +79,8 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path != '/register':
             self.send_response(404); self.end_headers(); return
-        if not hmac.compare_digest(self.headers.get('X-Reg-Token', ''), TOKEN):
+        token_hdr = self.headers.get('X-Reg-Token', '')
+        if not TOKEN or not token_hdr or not hmac.compare_digest(token_hdr, TOKEN):
             self.send_response(403); self.end_headers(); self.wfile.write(b'{"ok":false,"error":"bad token"}'); return
         try:
             length = int(self.headers.get('Content-Length', '0') or 0)

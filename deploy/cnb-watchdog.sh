@@ -46,7 +46,8 @@ try_fallback_start() {
   [ -f "$token" ] && token=$(cat "$token" 2>/dev/null || true)
   if [ -n "$token" ] && [ -n "$REPO" ]; then
     local last_fb=0
-    [ -f "${STATE_FILE}.fallback" ] && last_fb=$(cat "${STATE_FILE}.fallback" 2>/dev/null || echo 0)
+    [ -s "${STATE_FILE}.fallback" ] && last_fb=$(cat "${STATE_FILE}.fallback" 2>/dev/null)
+    last_fb=${last_fb:-0}
     local now=$(date +%s)
     if [ $((now - last_fb)) -lt "$FB_COOLDOWN" ]; then
       log "FALLBACK: cooling down ($((now - last_fb))s < ${FB_COOLDOWN}s), skip duplicate start"
@@ -115,7 +116,8 @@ case "$H" in
     # Step 2: At >=20 min, if still failing, both self-healing and fallback failed -> alert human!
     if [ "$FAILS" -ge "$THRESH_ALERT" ]; then
       last=0
-      [ -f "${STATE_FILE}.tg" ] && last=$(cat "${STATE_FILE}.tg" 2>/dev/null || echo 0)
+      [ -s "${STATE_FILE}.tg" ] && last=$(cat "${STATE_FILE}.tg" 2>/dev/null)
+      last=${last:-0}
       now=$(date +%s)
       if [ $((now - last)) -ge "$TG_COOLDOWN" ]; then
         echo "$now" > "${STATE_FILE}.tg"
