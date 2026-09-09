@@ -1,5 +1,5 @@
 #!/bin/bash
-# cnb2api external watchdog script (v5.1 dual-watchdog architecture)
+# cnb2api external watchdog script (v5.2 dual-watchdog architecture: silent fallback recovery)
 #
 # Usage:
 #   Run this via host crontab (e.g. `*/5 * * * * /path/to/cnb-watchdog.sh`)
@@ -11,6 +11,8 @@
 #   FALLBACK_TOKEN    Personal access token or file path containing token (optional)
 #   TG_BOT_TOKEN      Telegram Bot token for failure alerts (optional)
 #   TG_CHAT_ID        Telegram Chat ID for alerts (optional)
+#   CNB_QUOTA_FILE    Optional quota snapshot path to check staleness (e.g. /www/cnb-quota.json)
+#   CNB_SYNC_SCRIPT   Optional fallback sync script to run when quota is stale (> 900s)
 #
 set -uo pipefail
 
@@ -20,11 +22,13 @@ ENV_FILE="${CNB_WATCHDOG_ENV:-/etc/cnb-watchdog.env}"
 LOG="${CNB_WATCHDOG_LOG:-/var/log/cnb-watchdog.log}"
 STATE_FILE="${CNB_WATCHDOG_STATE:-/tmp/cnb-watchdog-fails}"
 REPO="${CNB_REPO:-}"
-FIXED="${FIXED_URL:-https://127.0.0.1:9001/health}"
+FIXED="${FIXED_URL:-http://127.0.0.1:9001/health}"
 THRESH_FALLBACK="${CNB_THRESH_FALLBACK:-3}"  # 3 fails (15 min): trigger silent fallback
 THRESH_ALERT="${CNB_THRESH_ALERT:-4}"        # 4 fails (20 min): alert only if fallback failed
 TG_COOLDOWN="${TG_COOLDOWN:-3600}"          # Telegram alert cooldown in seconds
 FB_COOLDOWN="${FB_COOLDOWN:-1800}"          # Fallback dispatch cooldown (30 min)
+QUOTA_FILE="${CNB_QUOTA_FILE:-}"
+SYNC_SCRIPT="${CNB_SYNC_SCRIPT:-}"
 
 log() { echo "[$(date '+%F %T')] $*" >> "$LOG"; }
 [ -f "$LOG" ] && [ "$(stat -c%s "$LOG" 2>/dev/null || echo 0)" -gt 5242880 ] && mv -f "$LOG" "$LOG.1"
@@ -85,6 +89,17 @@ case "$H" in
       # Recovered silently without bothering user
       log "OK: healthy (silent)"
       rm -f "${STATE_FILE}.fallback" 2>/dev/null || true
+    fi
+
+    # Fallback sync: if quota snapshot is stale (> 15 min due to CI cron dormancy),
+    # auto-refresh via external sync script if configured
+    if [ -n "$QUOTA_FILE" ] && [ -f "$QUOTA_FILE" ] && [ -n "$SYNC_SCRIPT" ] && [ -x "$SYNC_SCRIPT" ]; then
+      now_ts=$(date +%s)
+      mtime=$(stat -c %Y "$QUOTA_FILE" 2>/dev/null || stat -f %m "$QUOTA_FILE" 2>/dev/null || echo 0)
+      if [ $((now_ts - mtime)) -ge 900 ]; then
+        log "SYNC: quota stale ($((now_ts - mtime))s >= 900s), executing fallback sync script"
+        "$SYNC_SCRIPT" >/dev/null 2>&1 || true
+      fi
     fi
     exit 0
     ;;

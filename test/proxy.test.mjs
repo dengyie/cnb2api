@@ -33,6 +33,14 @@ const mockServer = http.createServer((req, res) => {
       // 之后不再写、也不 end
       return;
     }
+    if (parsed.model === 'mock-noeol') {
+      // 末尾 usage chunk 不以换行结尾就直接 FIN（sseTail 残留边界：收尾 flush 才能提取到 usage）
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.write('data: {"choices":[{"index":0,"delta":{"content":"hi"}}]}\n\n');
+      res.write('data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10}}');
+      res.end(); // 注意：无 \n 结尾
+      return;
+    }
     if (parsed.model === 'mock-slow') {
       upstreamState.clientAborted = false;
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
@@ -204,4 +212,64 @@ test('stream stall → idle watchdog ends response', async () => {
 test('unknown path → 404', async () => {
   const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/nope`);
   assert.equal(r.status, 404);
+});
+
+test('usage endpoint: stream + non-stream both counted', async () => {
+  const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/usage`, { headers: { Authorization: `Bearer ${KEY}` } });
+  assert.equal(r.status, 200);
+  const j = await r.json();
+  assert.ok(j.boot_id, 'boot_id present');
+  // 前面的聚合用例（非流式）+ 流式用例都打了带 usage {10,5} 的 mock 上游
+  assert.ok(j.totals.prompt >= 20, `prompt should accumulate, got ${j.totals.prompt}`);
+  assert.ok(j.totals.completion >= 10, `completion should accumulate, got ${j.totals.completion}`);
+});
+
+test('usage endpoint requires auth', async () => {
+  const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/usage`);
+  // 401=未授权；若 auth 测试已触发 60s 限速窗口则返回 429，两者均为拒绝
+  assert.ok([401, 429].includes(r.status), `expected 401/429, got ${r.status}`);
+});
+
+async function usageTotals() {
+  const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/usage`, { headers: { Authorization: `Bearer ${KEY}` } });
+  assert.equal(r.status, 200);
+  return (await r.json()).totals;
+}
+
+test('errors 计数口径：上游故障计 error，客户端取消不计', async () => {
+  // ① 上游 HTTP 500（透传路径）→ errors +1
+  const before500 = (await usageTotals()).errors;
+  await chat({ model: 'mock-500', messages: [] });
+  assert.equal((await usageTotals()).errors, before500 + 1, 'upstream 500 must count as error');
+
+  // ② 上游连接超时（504 路径）→ errors +1
+  const before504 = (await usageTotals()).errors;
+  await chat({ model: 'mock-hang', messages: [] });
+  assert.equal((await usageTotals()).errors, before504 + 1, 'upstream connect timeout must count as error');
+
+  // ③ 客户端中途取消流（正常行为）→ errors 不变
+  const beforeAbort = (await usageTotals()).errors;
+  const ac = new AbortController();
+  const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: 'mock-slow', messages: [], stream: true }),
+    signal: ac.signal,
+  });
+  assert.equal(r.status, 200);
+  await r.body.cancel();
+  await new Promise((res) => setTimeout(res, 300));
+  assert.equal((await usageTotals()).errors, beforeAbort, 'client abort must NOT count as error');
+});
+
+test('sseTail 收尾 flush：末 chunk 无换行结尾仍提取 usage', async () => {
+  const before = await usageTotals();
+  const r = await chat({ model: 'mock-noeol', messages: [], stream: true });
+  assert.equal(r.status, 200);
+  const text = await r.text();
+  assert.ok(text.includes('"content":"hi"'));
+  const after = await usageTotals();
+  // mock-noeol 上游 usage {7,3}：若收尾 flush 缺失，prompt 不增
+  assert.ok(after.prompt >= before.prompt + 7, `prompt must include tail-flushed usage, before=${before.prompt} after=${after.prompt}`);
+  assert.ok(after.completion >= before.completion + 3, 'completion must include tail-flushed usage');
 });

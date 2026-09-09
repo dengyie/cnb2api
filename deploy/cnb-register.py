@@ -30,8 +30,8 @@ for line in open(ENV_FILE):
     if line.startswith('REG_TOKEN='):
         TOKEN = line.split('=', 1)[1].strip().strip('"')
 
-# CNB_VSCODE_PROXY_URI looks like https://<subdomain>-{{port}}.cnb.run
-URI_RE = re.compile(r'^https://([a-z0-9]+)-\{\{port\}\}\.cnb\.run$')
+# CNB_VSCODE_PROXY_URI looks like https://<subdomain>-{{port}}.cnb.run or https://<subdomain>-<port>.cnb.run
+URI_RE = re.compile(r'^https://([a-z0-9]+)-(?:\{\{port\}\}|[0-9]+)\.cnb\.run$')
 
 
 def switch(sub):
