@@ -23,6 +23,7 @@ REPO="${CNB_REPO:-}"
 FIXED="${FIXED_URL:-https://127.0.0.1:9001/health}"
 THRESH="${CNB_THRESH:-3}"          # Consecutive fail threshold (3x5m ≈ 15 min)
 TG_COOLDOWN="${TG_COOLDOWN:-3600}"  # Telegram alert cooldown in seconds
+FB_COOLDOWN="${FB_COOLDOWN:-1800}"  # Fallback dispatch cooldown (30 min)
 
 log() { echo "[$(date '+%F %T')] $*" >> "$LOG"; }
 [ -f "$LOG" ] && [ "$(stat -c%s "$LOG" 2>/dev/null || echo 0)" -gt 5242880 ] && mv -f "$LOG" "$LOG.1"
@@ -39,6 +40,14 @@ try_fallback_start() {
   local token="${FALLBACK_TOKEN:-}"
   [ -f "$token" ] && token=$(cat "$token" 2>/dev/null || true)
   if [ -n "$token" ] && [ -n "$REPO" ]; then
+    local last_fb=0
+    [ -f "${STATE_FILE}.fallback" ] && last_fb=$(cat "${STATE_FILE}.fallback" 2>/dev/null || echo 0)
+    local now=$(date +%s)
+    if [ $((now - last_fb)) -lt "$FB_COOLDOWN" ]; then
+      log "FALLBACK: cooling down ($((now - last_fb))s < ${FB_COOLDOWN}s), skip duplicate start"
+      return 0
+    fi
+
     log "FALLBACK: triggering workspace/start via OpenAPI..."
     local resp
     resp=$(curl -s --max-time 30 -X POST "https://api.cnb.cool/$REPO/-/workspace/start" \
@@ -46,6 +55,7 @@ try_fallback_start() {
       -H "Content-Type: application/json" \
       -d '{"branch":"main"}' || true)
     log "FALLBACK: response: $resp"
+    echo "$now" > "${STATE_FILE}.fallback"
     echo "$resp"
     return 0
   fi
@@ -58,7 +68,7 @@ case "$H" in
     echo 0 > "$STATE_FILE"
     if [ -f "${STATE_FILE}.alerted" ]; then
       log "RECOVERED: fixed domain is healthy again"
-      rm -f "${STATE_FILE}.alerted" "${STATE_FILE}.tg"
+      rm -f "${STATE_FILE}.alerted" "${STATE_FILE}.tg" "${STATE_FILE}.fallback"
       tg_send "✅ cnb2api is healthy again: $FIXED passed check"
     else
       log "OK: healthy"
