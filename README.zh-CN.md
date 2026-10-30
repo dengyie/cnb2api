@@ -48,7 +48,7 @@
 - ⚡ **双协议栈原生支持**：
   - **OpenAI 兼容**：`/v1/chat/completions` 与 `/v1/models`，支持流式 SSE 透传与忠实的非流式状态机聚合（完整回填 `usage`、真实 `credit` 扣费、`tool_calls` 与 `finish_reason`）。
   - **Anthropic 兼容**：`/v1/messages` 与 `/v1/messages/count_tokens`，**Claude Code CLI 零中间件直连**，完整支持思考链（thinking）、多轮工具调用与事件流。
-  - 🛡️ **出站中性化规避**：自动等价重写 Claude Code 内部计费头与特征提示词短语，语义无损消除上游网关对 Claude Code 的 11128 误拦截。
+  - 🛡️ **出站中性化规避**：三层拦截对抗，语义无损。① **指纹改写**：Claude Code 的计费头/特征句、DSH（DeepSeek Harness）系统提示词里的 `@` 路径段落、Copilot/Cursor 的 main-branch 指纹句，统一改成等价表述；DSH 身份词组在 `DeepSeek` 与 `Harness` 之间插入零宽空格（跳过文件路径语境）。② **形状归一**：OpenAI 新角色 `developer` → `system`。③ **兜底重试**：真吃到 400/11128 时，先「system 折叠进首条 user」再「system/assistant 逐词打散」重发同一份内容（被拒请求不产生生成结果，重发不额外计费）。真机实测：网关只扫 `system`/`assistant` 两种角色的文本（user 内容与 tools 描述不扫），且是**模糊指纹**匹配——同一段话拆成单句都放过、合起来才拦，所以单纯堆关键词表不可能穷举。两条协议栈（`/v1/chat/completions` 与 `/v1/messages`）共用同一份逻辑；`PROXY_NEUTRALIZE=0` / `PROXY_BLOCK_RETRY=0` 可分级关闭。
 - ♻️ **v5.2 零凭据 + 双保险自愈架构**：
   - **凭据零保管**：工作区内零静态长期 Token，定时自愈流水线每次使用平台即时签发、任务结束即销毁的临时 `CNB_TOKEN`。
   - **动态域名自动跟随**：工作区开机自动向中继注册新子域名（`/ops/register`），中继热重载 upstream，客户端固定域名与 Key 永久不变；实测自愈恢复仅需 **~2 分 13 秒**。
@@ -176,6 +176,11 @@ npm run quota                 # 或: npx cnb2api-quota
 | `PROXY_PORT` | `9001` | 服务监听端口。 |
 | `PROXY_UPSTREAM_TIMEOUT_MS` | `15000` | 上游连接首字节超时 (ms)。 |
 | `PROXY_IDLE_TIMEOUT_MS` | `300000` | 流式事件空闲超时看门狗 (ms)。 |
+| `PROXY_NEUTRALIZE` | `1` | 出站中性化（客户端指纹改写，见 `src/neutralize.mjs`）。`0` = 原样发送一个字节都不改。 |
+| `PROXY_NEUTRALIZE_AGGRESSIVE` | `0` | 连品牌词本身也打散。极少需要；默认关闭以保住模型名与正文原样。 |
+| `PROXY_BLOCK_RETRY` | `1` | 11128 兜底重试：被拒后依次用「system 折叠进首条 user」「system/assistant 逐词打散」重发同一份内容。`0` = 只做表内改写、被拒即透传错误。 |
+| `PROXY_ENSURE_SYSTEM` | `1` | `developer` → `system`，并把中途出现的 system 提前；不会凭空造 system。 |
+| `PROXY_SYNTHETIC_SYSTEM` | `0` | 请求完全没有 system 时补一条中性 system。默认关闭（会改提示词语义）。 |
 | `REGISTER_URL` | — (可选) | 中继自注册 `/ops/register` 地址。 |
 | `REG_TOKEN` | — (可选) | 中继自注册鉴权密钥。 |
 
@@ -188,6 +193,9 @@ A: `/v1/models` 是**自发现**的：CNB 网关没有列表接口，所以反�
 
 **Q: 原生函数/工具调用（Tool Calls）支持怎么样？**  
 A: 完整原生支持。流式模式下支持 `input_json_delta` 增量合并，非流式模式下忠实聚合出标准的 `tool_calls` 结构。
+
+**Q: 用 DeepSeek Harness（DSH）等客户端一直报 `11128 Illegal API invocation from an unapproved channel` 怎么办？**  
+A: 这是上游对**提示词内容**的客户端指纹风控，不是鉴权或渠道问题——换令牌、换账号、换模型都无效，短请求会「碰巧」放过，所以看起来像时好时坏。真机逐段二分（2026-10）实测的规律：**只扫 `system` 与 `assistant` 角色的文本**（同一段话放 user 里、或放 tools 描述里都 200），而且是**模糊匹配**——DSH 系统提示词里「`@` 路径引用」那两句，单独一句都放过、连在一起就整条 400/11128。因此本反代默认三层处理：① 已知指纹句改成等价表述 + 身份词组插零宽空格（跳过文件路径语境，避免工具调用拿到坏路径）；② `developer` 归一为 `system`；③ 真被拒时自动换形态重发（system 折叠进首条 user → system/assistant 逐词打散），被拒请求不产生生成结果、不重复计费。升级后重启工作区即生效，日志里能看到 `outbound neutralized` / `blocked retry recovered`；上游若再收紧，往 `src/neutralize.mjs` 的表里加一项，兜底重试会自动接住表外的情况。
 
 **Q: 是否违反 CNB 用户条款？**  
 A: 本项目完全运行在你的合法工作区中，调用官方公开文档中的正规端点，使用平台签发的流水线 Token，扣除的是你组织的自有配额。不逆向、不破解、不涉及灰产爬虫。

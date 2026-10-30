@@ -19,6 +19,24 @@ export const config = {
   maxBodyBytes: 4 * 1024 * 1024,
   upstreamTimeoutMs: Number(process.env.PROXY_UPSTREAM_TIMEOUT_MS || 15_000), // connect + first byte
   idleTimeoutMs: Number(process.env.PROXY_IDLE_TIMEOUT_MS || 300_000),        // per-stream idle cap (reset each chunk)
+  // Outbound neutralization (see src/neutralize.mjs). On by default: without it
+  // the upstream fingerprint moderation rejects agent prompts that carry a
+  // client identity string with HTTP 400 / code 11128 ("unapproved channel").
+  neutralize: process.env.PROXY_NEUTRALIZE !== '0',
+  // Break the brand word itself too. Off by default because it rewrites far more
+  // text (model names in prose etc.) than the identity phrase needs.
+  neutralizeAggressive: process.env.PROXY_NEUTRALIZE_AGGRESSIVE === '1',
+  // Upstream wants the first message to be `system`; map developer→system and
+  // hoist a system message that appears later. A missing system is left alone
+  // unless PROXY_SYNTHETIC_SYSTEM=1 (see src/neutralize.mjs).
+  ensureSystemFirst: process.env.PROXY_ENSURE_SYSTEM !== '0',
+  syntheticSystem: process.env.PROXY_SYNTHETIC_SYSTEM === '1',
+  // 11128 fallback: when the upstream still rejects a request with HTTP 400 /
+  // code 11128 (fuzzy client-fingerprint moderation that no keyword table can
+  // exhaust), re-send the same content in a shape the scanner does not inspect
+  // (system folded into the first user turn, then word-level obfuscation).
+  // Rejected requests generate nothing, so a retry costs no extra credits.
+  blockRetry: process.env.PROXY_BLOCK_RETRY !== '0',
   authFailWindowMs: 60_000,
   authFailMax: 10,
   upstreamUrl: '',

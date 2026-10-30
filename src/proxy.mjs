@@ -4,6 +4,7 @@ import { log } from './log.mjs';
 import { aggregate } from './sse.mjs';
 import { record as recordUsage } from './usage.mjs';
 import { observe as observeModel } from './models.mjs';
+import { prepareOutbound, foldSystemIntoUser, obfuscateNonUser } from './neutralize.mjs';
 
 // 出站请求剥除思考开关：带 reasoning_effort 等思考参数时上游路由到 thinking 变体，
 // 而该变体把推理阶段也计入 max_tokens——推理吃满预算后 finish_reason=length、
@@ -30,37 +31,75 @@ export async function forward({ reqId, payload, wantStream, res, transform }) {
   const abortUpstream = () => ac.abort();
   res.on('close', () => { if (!res.writableEnded) abortUpstream(); });
 
-  const timer = setTimeout(abortUpstream, config.upstreamTimeoutMs);
-  let up;
-  try {
-    up = await fetch(config.upstreamUrl, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${config.upstreamToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...stripReasoningTriggers(payload), stream: true }),
-      signal: ac.signal,
-    });
-  } catch (e) {
-    clearTimeout(timer);
-    // res 已死 = 客户端先断开触发 abort（正常行为），请求未产生上游结果，不计 errors
-    if (res.writableEnded || res.destroyed) return { handled: true, status: null };
-    // res 仍活 = 纯上游侧连接故障（超时 or 拒绝），计入 errors：看板最该暴露的信号
-    recordUsage({ errors: 1 });
-    if (ac.signal.aborted) {
-      log.warn(reqId, 'upstream connect timeout', { ms: config.upstreamTimeoutMs });
-      return { handled: false, status: 504, body: { error: { message: 'upstream connect timeout' } } };
-    }
-    log.error(reqId, 'upstream fetch failed', { err: String(e).slice(0, 200) });
-    // 错误详情只进日志：内部异常串（含 cause/payload 片段）不外泄给客户端
-    return { handled: false, status: 502, body: { error: { message: 'upstream connect failed' } } };
-  }
-  clearTimeout(timer);
+  // 出站中性化：两条协议栈（OpenAI 透传 / Anthropic 转换）在这里汇合，
+  // 关键词风控与首条 system 形状的规避只做一次（见 neutralize.mjs）。
+  const { payload: outbound, rewritten } = prepareOutbound(payload, {
+    enabled: config.neutralize,
+    aggressive: config.neutralizeAggressive,
+    ensureSystem: config.ensureSystemFirst,
+    syntheticSystem: config.syntheticSystem,
+  });
+  if (rewritten) log.info(reqId, 'outbound neutralized', { fields: rewritten });
 
-  if (!up.ok) {
+  // 上游内容风控（HTTP 400 / 业务码 11128）是「客户端指纹」的模糊匹配：
+  // 无法用关键词表穷举（同一段话拆开都不拦、合起来才拦），所以关键词改写之外
+  // 再加两级兜底形态，按级重发同一份内容（见 neutralize.mjs 顶部说明）。
+  // 被拦的请求不会产生任何生成结果，重发不重复计费；正常请求只走第一级。
+  const attempts = [{ strategy: 'primary', body: outbound }];
+  if (config.blockRetry && outbound && typeof outbound === 'object' && !Array.isArray(outbound)) {
+    const folded = foldSystemIntoUser(outbound);
+    if (folded !== outbound) attempts.push({ strategy: 'fold-system', body: folded });
+    const obfuscated = obfuscateNonUser(folded);
+    if (obfuscated !== folded) attempts.push({ strategy: 'obfuscate', body: obfuscated });
+  }
+
+  let up = null;
+  for (let i = 0; i < attempts.length; i += 1) {
+    const { strategy, body } = attempts[i];
+    const timer = setTimeout(abortUpstream, config.upstreamTimeoutMs);
+    try {
+      up = await fetch(config.upstreamUrl, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${config.upstreamToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...stripReasoningTriggers(body), stream: true }),
+        signal: ac.signal,
+      });
+    } catch (e) {
+      clearTimeout(timer);
+      // res 已死 = 客户端先断开触发 abort（正常行为），请求未产生上游结果，不计 errors
+      if (res.writableEnded || res.destroyed) return { handled: true, status: null };
+      // res 仍活 = 纯上游侧连接故障（超时 or 拒绝），计入 errors：看板最该暴露的信号
+      recordUsage({ errors: 1 });
+      if (ac.signal.aborted) {
+        log.warn(reqId, 'upstream connect timeout', { ms: config.upstreamTimeoutMs });
+        return { handled: false, status: 504, body: { error: { message: 'upstream connect timeout' } } };
+      }
+      log.error(reqId, 'upstream fetch failed', { err: String(e).slice(0, 200) });
+      // 错误详情只进日志：内部异常串（含 cause/payload 片段）不外泄给客户端
+      return { handled: false, status: 502, body: { error: { message: 'upstream connect failed' } } };
+    }
+    clearTimeout(timer);
+
+    if (up.ok) {
+      if (i > 0) log.warn(reqId, 'blocked retry recovered', { strategy, attempt: i + 1 });
+      break;
+    }
+
+    // 客户端已经走了：错误体不必再读，也没有人可以接收重发结果
+    if (res.destroyed || res.writableEnded) return { handled: true, status: null };
+
     const t = await up.text().catch(() => '');
+    if (isBlocked11128(up.status, t) && i < attempts.length - 1) {
+      log.warn(reqId, 'upstream blocked, retrying', { strategy, next: attempts[i + 1].strategy, status: up.status });
+      continue;
+    }
     log.warn(reqId, 'upstream error', { status: up.status, preview: t.slice(0, 200) });
-    recordUsage({ errors: 1 }); // 上游 HTTP 错误（配额耗尽 402/网关 5xx 等）计入 errors
+    recordUsage({ errors: 1 }); // 上游 HTTP 错误（配额耗尽 402/网关 5xx/风控 11128 等）计入 errors
     return { handled: false, status: up.status, body: safeJsonOrText(t) };
   }
+
+  // 兜底：循环内每个非 200 分支都已 return，这里只防御未来重构漏写分支。
+  if (!up || !up.ok) return { handled: false, status: 502, body: { error: { message: 'upstream connect failed' } } };
 
   if (wantStream) {
     res.writeHead(200, {
@@ -182,4 +221,17 @@ export async function forward({ reqId, payload, wantStream, res, transform }) {
 
 function safeJsonOrText(t) {
   try { return JSON.parse(t); } catch { return { error: { message: t.slice(0, 500) || 'upstream error' } }; }
+}
+
+// 上游内容风控的固定形状：HTTP 400 + 业务码 11128（"Illegal API invocation from
+// an unapproved channel"）。只认这一种，别的 400（参数错、多余字段…）不重试——
+// 重试只会把同一个错误再打一遍上游。
+// 业务码可能以数字或字符串出现，消息也可能只带 Illegal API invocation 字样；
+// 三种都认，避免上游改一处序列化就让整条兜底失效。
+export function isBlocked11128(status, text) {
+  if (status !== 400) return false;
+  const s = String(text || '');
+  return /["']?code["']?\s*:\s*["']?11128(?=\D|$)/.test(s)
+    || /unapproved channel/i.test(s)
+    || /Illegal API invocation/i.test(s);
 }

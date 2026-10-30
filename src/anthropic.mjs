@@ -32,30 +32,10 @@ export class ProtocolError extends Error {
 // 请求侧：Messages → OpenAI chat.completions
 // ---------------------------------------------------------------------------
 
-// Some upstream gateways false-positive on a few well-known prompt phrases and
-// reject the whole request. Before sending, rewrite those phrases to equivalent
-// wording (values/URLs preserved) so benign requests go through untouched
-// otherwise. Table-driven: extend UPSTREAM_BLOCKED_PHRASES if your gateway
-// flags something new.
-const UPSTREAM_BLOCKED_PHRASES = [
-  // claude code 注进 system 首块的内部计费头名，部分网关按字面拦这个 token；
-  // 换等价无害标记，值原样保留（模型不受影响）。
-  [/x-anthropic-billing-header/gi, 'x-cc-billing-meta'],
-  [
-    /to give feedback, users should report the issue at (https:\/\/github\.com\/anthropics\/claude-code\/issues)/gi,
-    'to share feedback, users can report the issue at $1',
-  ],
-  [
-    /you are claude code, anthropic's official cli for claude(\.)?/gi,
-    "you are claude code, a command-line coding assistant$1",
-  ],
-];
-
-function neutralize(text) {
-  let t = text;
-  for (const [re, replacement] of UPSTREAM_BLOCKED_PHRASES) t = t.replace(re, replacement);
-  return t;
-}
+// 出站中性化与 proxy.mjs 共用同一张表（src/neutralize.mjs）：这里在转换时就改写，
+// 让 /v1/messages 的单元测试直接覆盖到；proxy.mjs 在 fetch 前还会再跑一遍
+// （幂等），保证 /v1/chat/completions 透传路径同样被覆盖。
+import { neutralize } from './neutralize.mjs';
 
 export function fromAnthropicRequest(body) {
   if (!body || typeof body !== 'object') throw new ProtocolError('request body must be a JSON object');
@@ -85,11 +65,13 @@ export function fromAnthropicRequest(body) {
 
   for (const m of body.messages) {
     // system 角色虽非 Anthropic 规范，但真实客户端（claude code 部分版本/new-api 转发链）
-    // 会直接塞进 messages；上游 OpenAI 端点原生支持，按序透传即可
-    if (!m || (m.role !== 'user' && m.role !== 'assistant' && m.role !== 'system')) {
+    // 会直接塞进 messages；上游 OpenAI 端点原生支持，按序透传即可。
+    // developer 是 OpenAI 新版 system 别名（DSH 等新客户端会发），统一降级成
+    // system：既避免 400，也满足上游「首条必须是 system」的形状要求。
+    if (!m || (m.role !== 'user' && m.role !== 'assistant' && m.role !== 'system' && m.role !== 'developer')) {
       throw new ProtocolError(`messages[].role: unsupported role ${JSON.stringify(m?.role)}`);
     }
-    messages.push(...convertMessage(m));
+    messages.push(...convertMessage(m.role === 'developer' ? { ...m, role: 'system' } : m));
   }
   out.messages = messages;
 

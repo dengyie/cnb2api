@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rmSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const MOCK_PORT = 19101;
 const PROXY_PORT = 19102;
@@ -16,13 +17,52 @@ const KEY = 'test-key-12345';
 const STATE_PATH = join(tmpdir(), `cnb2api-models-test-${process.pid}.json`);
 
 // ---- mock 上游：完整 SSE（usage/tool_calls/finish_reason）+ 可选慢响应 ----
-const upstreamState = { clientAborted: false, lastBody: null };
+const upstreamState = { clientAborted: false, lastBody: null, calls: 0 };
 const mockServer = http.createServer((req, res) => {
   let body = '';
   req.on('data', (c) => (body += c));
   req.on('end', () => {
     const parsed = JSON.parse(body);
     upstreamState.lastBody = parsed; // 捕获打向上游的出站请求体（剥除类断言用）
+    upstreamState.calls += 1;
+
+    if (parsed.model === 'mock-11128') {
+      // 模拟上游内容风控：只要还带着 system 角色就整条 400 / code 11128
+      // （代理的兜底策略应把 system 折叠进 user 后重发）
+      if ((parsed.messages || []).some((m) => m?.role === 'system')) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ code: 11128, msg: 'Illegal API invocation from an unapproved channel', requestId: 'mock-req' }));
+        return;
+      }
+    } else if (parsed.model === 'mock-fuzzy') {
+      // 模拟真机测到的「模糊指纹」：system 里同时出现 @ 路径句与 workspace root 才拦。
+      // 指纹改写应当在首次请求就拆掉这个组合 → calls 必须为 1。
+      const sys = (parsed.messages || [])
+        .filter((m) => m?.role === 'system')
+        .map((m) => (typeof m.content === 'string' ? m.content : ''))
+        .join('\n');
+      if (/paths the user explicitly referenced/i.test(sys) && /Relative paths resolve from the workspace root/i.test(sys)) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ code: 11128, msg: 'Illegal API invocation from an unapproved channel' }));
+        return;
+      }
+    } else if (parsed.model === 'mock-11128-deep') {
+      // 模拟指纹落在 assistant 历史里：fold 只搬 system，第二级必须靠逐词打散
+      const scanned = (parsed.messages || [])
+        .filter((m) => m?.role === 'system' || m?.role === 'assistant')
+        .map((m) => (typeof m.content === 'string' ? m.content : ''))
+        .join('\n');
+      if (/secret fingerprint/i.test(scanned)) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ code: 11128, msg: 'Illegal API invocation from an unapproved channel' }));
+        return;
+      }
+    } else if (parsed.model === 'mock-400') {
+      // 非 11128 的 400：参数类错误，重发没有意义，代理必须原样透传、不重试
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'bad parameter', code: 'invalid_request' } }));
+      return;
+    }
 
     if (parsed.model === 'mock-500') {
       res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -90,7 +130,7 @@ async function waitPort(port, timeoutMs = 5000) {
 
 function startProxy(env = {}) {
   return spawn(process.execPath, ['src/server.mjs'], {
-    cwd: new URL('..', import.meta.url).pathname,
+    cwd: fileURLToPath(new URL('..', import.meta.url)),
     env: { ...process.env, PROXY_PORT: String(PROXY_PORT), PROXY_KEY: KEY, CNB_REPO_SLUG: 'test/repo', CNB_TOKEN: 'test-token', UPSTREAM_OVERRIDE: `http://127.0.0.1:${MOCK_PORT}`, PROXY_UPSTREAM_TIMEOUT_MS: '400', PROXY_IDLE_TIMEOUT_MS: '400', PROXY_MODELS_STATE: STATE_PATH, ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -417,9 +457,145 @@ test('reasoning_effort 出站剥除（真机教训：触发上游 thinking 变�
   assert.equal(upstreamState.lastBody.stream, true);
 });
 
+test('出站中性化：网关拦的客户端指纹句（@ 路径 / Main branch）被等价改写', async () => {
+  const r = await chat({
+    model: 'deepseek-v4.1-flash',
+    messages: [
+      {
+        role: 'system',
+        content: 'Tokens prefixed with @ are paths the user explicitly referenced. Relative paths resolve from the workspace root; absolute paths identify files or directories on the host. Main branch (you will usually use this for PRs)',
+      },
+      { role: 'user', content: 'hi' },
+    ],
+    stream: false,
+  });
+  assert.equal(r.status, 200);
+  const sys = upstreamState.lastBody.messages[0].content;
+  assert.ok(!/paths the user explicitly referenced/i.test(sys), '@-path fingerprint must be rewritten');
+  assert.ok(!/Relative paths resolve from the workspace root/i.test(sys), 'workspace-root fingerprint must be rewritten');
+  assert.ok(!/you will usually use this for PRs/i.test(sys), 'main-branch fingerprint must be rewritten');
+});
+
+test('出站中性化：/v1/chat/completions 透传路径同样改写 DSH 身份词组与 developer 角色', async () => {
+  const r = await chat({
+    model: 'mock-model',
+    messages: [
+      { role: 'developer', content: 'You are an AI agent powered by DeepSeek Harness.' },
+      { role: 'user', content: 'hi' },
+    ],
+    stream: false,
+  });
+  assert.equal(r.status, 200);
+  const sent = upstreamState.lastBody.messages;
+  assert.equal(sent[0].role, 'system', 'developer must be mapped to system on the pass-through path');
+  assert.match(sent[0].content, /DeepSeek\u200b/);
+});
+
+test('11128 兜底：模糊指纹在首次请求即被表内改写拆掉（不触发重发）', async () => {
+  upstreamState.calls = 0;
+  const r = await chat({
+    model: 'mock-fuzzy',
+    messages: [
+      {
+        role: 'system',
+        content: 'Tokens prefixed with @ are paths the user explicitly referenced. Relative paths resolve from the workspace root; absolute paths identify files or directories on the host.',
+      },
+      { role: 'user', content: 'hi' },
+    ],
+    stream: false,
+  });
+  assert.equal(r.status, 200);
+  assert.equal(upstreamState.calls, 1, 'the phrase table alone must clear the measured fuzzy fingerprint');
+});
+
+test('11128 兜底：带 system 被风控拒绝后，折叠进首条 user 重发并成功', async () => {
+  upstreamState.calls = 0;
+  const r = await chat({
+    model: 'mock-11128',
+    messages: [
+      { role: 'system', content: 'You are an AI agent powered by DeepSeek Harness.' },
+      { role: 'user', content: 'hi' },
+    ],
+    stream: false,
+  });
+  assert.equal(r.status, 200);
+  const j = await r.json();
+  assert.equal(j.choices[0].message.content, 'hello');
+  assert.equal(upstreamState.calls, 2, 'first attempt blocked by 11128, second attempt re-sent');
+  const sent = upstreamState.lastBody.messages;
+  assert.deepEqual(sent.map((m) => m.role), ['user'], 'system must be folded away');
+  assert.match(sent[0].content, /^System instructions:/);
+  assert.ok(sent[0].content.includes('hi'), 'original user text preserved after the folded system text');
+});
+
+test('11128 兜底：流式路径同样重发（真实客户端走流式）', async () => {
+  upstreamState.calls = 0;
+  const r = await chat({
+    model: 'mock-11128',
+    messages: [
+      { role: 'system', content: 'system text' },
+      { role: 'user', content: 'hi' },
+    ],
+    stream: true,
+  });
+  assert.equal(r.status, 200);
+  const text = await r.text();
+  assert.ok(text.includes('"content":"he"'), 'stream must deliver normal SSE after retry');
+  assert.ok(text.includes('[DONE]'));
+  assert.equal(upstreamState.calls, 2);
+  assert.deepEqual(upstreamState.lastBody.messages.map((m) => m.role), ['user']);
+});
+
+test('11128 兜底：/v1/messages 适配路径也走同一套重发', async () => {
+  upstreamState.calls = 0;
+  const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'mock-11128',
+      max_tokens: 64,
+      system: 'be terse',
+      messages: [{ role: 'user', content: 'hi' }],
+    }),
+  });
+  assert.equal(r.status, 200);
+  const j = await r.json();
+  assert.equal(j.type, 'message');
+  assert.equal(j.content[0].text, 'hello');
+  assert.equal(upstreamState.calls, 2, 'anthropic adapter must share the retry ladder');
+});
+
+test('11128 兜底：指纹落在 assistant 历史时，第三次逐词打散才恢复', async () => {
+  upstreamState.calls = 0;
+  const r = await chat({
+    model: 'mock-11128-deep',
+    messages: [
+      { role: 'system', content: 'be terse' },
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'secret fingerprint in history' },
+      { role: 'user', content: 'again' },
+    ],
+    stream: false,
+  });
+  assert.equal(r.status, 200);
+  assert.equal(upstreamState.calls, 3, 'primary → fold-system → obfuscate');
+  const sent = upstreamState.lastBody.messages;
+  assert.deepEqual(sent.map((m) => m.role), ['user', 'assistant', 'user']);
+  assert.ok(sent[1].content.includes('\u200b'), 'assistant fingerprint must be word-obfuscated');
+  assert.equal(sent[1].content.replaceAll('\u200b', ''), 'secret fingerprint in history');
+});
+
+test('11128 兜底：非 11128 的 400 原样透传且不重试（参数错重发没有意义）', async () => {
+  upstreamState.calls = 0;
+  const r = await chat({ model: 'mock-400', messages: [{ role: 'user', content: 'hi' }], stream: false });
+  assert.equal(r.status, 400);
+  assert.equal(upstreamState.calls, 1, 'non-11128 400 must not be retried');
+  assert.match(JSON.stringify(await r.json()), /bad parameter/);
+});
+
 test('超时环境变量非法值 → 启动即拒（fail-fast，回归：NaN 曾使 setTimeout 按 0ms 触发、每条流瞬间 abort）', async () => {
   const bad = spawn(process.execPath, ['src/server.mjs'], {
-    cwd: new URL('..', import.meta.url).pathname,
+    cwd: fileURLToPath(new URL('..', import.meta.url)),
     env: { ...process.env, PROXY_PORT: String(PROXY_PORT + 1), PROXY_KEY: KEY, CNB_REPO_SLUG: 'test/repo', CNB_TOKEN: 'test-token', UPSTREAM_OVERRIDE: `http://127.0.0.1:${MOCK_PORT}`, PROXY_IDLE_TIMEOUT_MS: 'abc' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
