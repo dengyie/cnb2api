@@ -233,6 +233,39 @@ test('请求转换：thinking 请求参数不泄漏出站（真机教训：触�
   assert.equal(out.messages.length, 1);
 });
 
+test('请求转换：显式开启 CNB2API_ALLOW_THINKING 后 thinking 映射透传（逃生口）', () => {
+  // 默认丢弃是安全默认值，但会把客户端永久锁死在非 thinking 变体上。部署显式
+  // opt-in 后按上游 OpenAI 端点认识的形状映射：thinking:{type:enabled} +
+  // reasoning_effort。budget_tokens 不映射（上游无对应字段）。
+  const out = fromAnthropicRequest({
+    model: 'claude-sonnet-4-5',
+    max_tokens: 60000,
+    thinking: { type: 'enabled', budget_tokens: 2048, effort: 'high' },
+    messages: [{ role: 'user', content: 'hi' }],
+  }, { allowThinking: true });
+  assert.deepEqual(out.thinking, { type: 'enabled' });
+  assert.equal(out.reasoning_effort, 'high');
+  // 其余字段照旧
+  assert.equal(out.max_tokens, 60000);
+  assert.equal(out.messages.length, 1);
+
+  // thinking:disabled 不该被映射成 enabled —— 客户端明确要关就必须关
+  const disabled = fromAnthropicRequest({
+    max_tokens: 60000,
+    thinking: { type: 'disabled' },
+    messages: [{ role: 'user', content: 'hi' }],
+  }, { allowThinking: true });
+  assert.equal(disabled.thinking, undefined);
+
+  // 没带 thinking 的请求不受开启影响（无开关可透传）
+  const plain = fromAnthropicRequest({
+    max_tokens: 60000,
+    messages: [{ role: 'user', content: 'hi' }],
+  }, { allowThinking: true });
+  assert.equal(plain.thinking, undefined);
+  assert.equal(plain.reasoning_effort, undefined);
+});
+
 // ---------------------------------------------------------------------------
 // 非流式响应转换
 // ---------------------------------------------------------------------------

@@ -181,8 +181,24 @@ npm run quota                 # or: npx cnb2api-quota
 | `PROXY_BLOCK_RETRY` | `1` | 11128 fallback ladder: after a rejection, re-send the same content with the system folded into the first user turn, then with system/assistant text word-obfuscated. `0` = table rewrites only, pass the error through. |
 | `PROXY_ENSURE_SYSTEM` | `1` | Map `developer` → `system` and hoist a later system message. Never invents a system message. |
 | `PROXY_SYNTHETIC_SYSTEM` | `0` | Prepend a neutral system message when the request has none. Off by default (changes prompt semantics). |
+| `CNB2API_ALLOW_THINKING` | off | Set to `1` to forward client thinking toggles (`reasoning_effort` / `reasoning` / `enable_thinking` / `thinking`, and Anthropic `thinking:{type:"enabled"}`) to the upstream thinking variant instead of stripping them. Only use it if your clients send a large `max_tokens` — see the thinking note below. |
 | `REGISTER_URL` | — (optional) | Relay `/ops/register` endpoint for self-registration. |
 | `REG_TOKEN` | — (optional) | Shared secret for self-registration. |
+
+### Thinking is stripped by default
+
+The upstream thinking variant bills its reasoning phase against `max_tokens`. With a
+small budget the reasoning consumes the whole allowance, the stream ends with
+`finish_reason: length` and **no answer is ever generated** (measured: a hard prompt
+at `max_tokens` 2048 and 8192 produced 4.6k / 20.3k characters of reasoning and zero
+content). To keep clients from hitting that, thinking toggles are removed from every
+outbound request.
+
+That default is safe but absolute: it also locks out callers that *do* provide a large
+budget, for whom thinking works correctly (verified at `max_tokens: 60000`, where
+reasoning and answer are emitted in sequence). Set `CNB2API_ALLOW_THINKING=1` to opt in
+and take responsibility for the budget. Requests that carry no thinking toggle behave
+identically either way.
 
 ---
 

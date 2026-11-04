@@ -181,8 +181,20 @@ npm run quota                 # 或: npx cnb2api-quota
 | `PROXY_BLOCK_RETRY` | `1` | 11128 兜底重试：被拒后依次用「system 折叠进首条 user」「system/assistant 逐词打散」重发同一份内容。`0` = 只做表内改写、被拒即透传错误。 |
 | `PROXY_ENSURE_SYSTEM` | `1` | `developer` → `system`，并把中途出现的 system 提前；不会凭空造 system。 |
 | `PROXY_SYNTHETIC_SYSTEM` | `0` | 请求完全没有 system 时补一条中性 system。默认关闭（会改提示词语义）。 |
+| `CNB2API_ALLOW_THINKING` | 关闭 | 设为 `1` 时，把客户端的思考开关（`reasoning_effort` / `reasoning` / `enable_thinking` / `thinking`，以及 Anthropic 的 `thinking:{type:"enabled"}`）透传到上游 thinking 变体，而不是出站剥除。仅在客户端会给出足够大 `max_tokens` 时开启——详见下方说明。 |
 | `REGISTER_URL` | — (可选) | 中继自注册 `/ops/register` 地址。 |
 | `REG_TOKEN` | — (可选) | 中继自注册鉴权密钥。 |
+
+### 默认剥除思考开关
+
+上游 thinking 变体会把推理阶段计入 `max_tokens`。预算偏小时推理吃满全部额度，流以
+`finish_reason: length` 结束且**答案永不产出**（实测：硬 prompt 在 `max_tokens` 2048 与
+8192 下分别产出 4.6k / 20.3k 字符推理、正文为零）。为避免客户端踩到该退化形态，出站请求
+统一剥除思考开关。
+
+该默认值安全但绝对：它同时把**给了足够预算**的调用方一并挡在门外，而这类调用方本来是能
+正常思考的（`max_tokens: 60000` 实测推理与正文依次产出）。设 `CNB2API_ALLOW_THINKING=1`
+即可显式开启，并由调用方自行保证预算。未携带思考开关的请求在两种设置下行为完全一致。
 
 ---
 

@@ -159,7 +159,7 @@ const server = http.createServer(async (req, res) => {
 
       let openaiPayload;
       try {
-        openaiPayload = fromAnthropicRequest(anthropicBody);
+        openaiPayload = fromAnthropicRequest(anthropicBody, { allowThinking: config.allowThinking });
       } catch (e) {
         if (e instanceof ProtocolError) {
           return send(res, e.status, { type: 'error', error: { type: 'invalid_request_error', message: e.message } });
