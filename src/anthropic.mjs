@@ -57,7 +57,7 @@ function neutralize(text) {
   return t;
 }
 
-export function fromAnthropicRequest(body) {
+export function fromAnthropicRequest(body, { allowThinking = false } = {}) {
   if (!body || typeof body !== 'object') throw new ProtocolError('request body must be a JSON object');
   if (!Array.isArray(body.messages) || body.messages.length === 0) {
     throw new ProtocolError('messages: must be a non-empty array');
@@ -107,6 +107,17 @@ export function fromAnthropicRequest(body) {
   if (body.tool_choice) {
     const tc = convertToolChoice(body.tool_choice);
     if (tc) out.tool_choice = tc;
+  }
+
+  // 思考开关（默认丢弃，见下）：Anthropic 用 thinking:{type,budget_tokens} 表达，
+  // 上游 OpenAI 端点认 thinking:{type:enabled} + reasoning_effort。仅当部署显式开启
+  // CNB2API_ALLOW_THINKING=1 时映射透传；默认丢弃，理由与 proxy.mjs 出站剥除同一
+  // 教训——thinking 变体把推理计入 max_tokens，预算不足时 content 永不产出。
+  // budget_tokens 不映射：上游没有对应字段，强度用 reasoning_effort 表达。
+  if (allowThinking && body.thinking && typeof body.thinking === 'object'
+    && body.thinking.type === 'enabled') {
+    out.thinking = { type: 'enabled' };
+    if (typeof body.thinking.effort === 'string') out.reasoning_effort = body.thinking.effort;
   }
   return out;
 }

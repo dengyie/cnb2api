@@ -10,9 +10,18 @@ import { observe as observeModel } from './models.mjs';
 // content 全空（答案永不生成，真机实测 2048/8192 token 必现）。上游无正确开关可配，
 // 出站统一剥除、锁定非 thinking 变体（与 /v1/messages 请求侧丢弃 thinking 块同一策略）。
 // 表驱动：上游若引入新的思考开关命名，往这张表加一项即可。
+//
+// 逃生口：剥除是"安全默认值"，不是"唯一正确策略"。它把客户端永久锁死在非 thinking
+// 变体上，思考能力整体消失——2026-10-08 同步本提交后，某下游的 CNB 侧 reasoning 从
+// 每天数百万字符直接归零，且试遍参数拼写（reasoningEffort / enableThinking /
+// chat_template_kwargs / extra_body / thinking_budget）都无法再触达 thinking 变体。
+// 会翻车的组合其实只是"思考开关 + 过小的 max_tokens"；max_tokens 给够时推理与正文会
+// 依次产出（2026-09-18/09-20 真实流量在 max_tokens=60000 下完全正常）。
+// 因此：默认仍剥除，工作区显式设 CNB2API_ALLOW_THINKING=1 时放行，由客户端自负预算。
 const REASONING_TRIGGERS = ['reasoning_effort', 'reasoning', 'enable_thinking', 'thinking'];
 
 function stripReasoningTriggers(payload) {
+  if (config.allowThinking) return payload;
   if (!REASONING_TRIGGERS.some((k) => k in payload)) return payload;
   const out = { ...payload };
   for (const k of REASONING_TRIGGERS) delete out[k];

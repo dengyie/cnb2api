@@ -426,3 +426,45 @@ test('超时环境变量非法值 → 启动即拒（fail-fast，回归：NaN �
   const code = await new Promise((r) => bad.on('exit', (c) => r(c)));
   assert.equal(code, 1, 'must refuse to start with a non-numeric timeout');
 });
+
+// ---------------------------------------------------------------------------
+// 逃生口：CNB2API_ALLOW_THINKING=1 时放行思考开关
+// 独立起一个进程（配置在启动时读取），用独立端口避免与主实例冲突
+// ---------------------------------------------------------------------------
+test('CNB2API_ALLOW_THINKING=1 → 思考开关透传到上游（逃生口）', async () => {
+  const OPTIN_PORT = PROXY_PORT + 2;
+  const optIn = spawn(process.execPath, ['src/server.mjs'], {
+    cwd: new URL('..', import.meta.url).pathname,
+    env: {
+      ...process.env, PROXY_PORT: String(OPTIN_PORT), PROXY_KEY: KEY, CNB_REPO_SLUG: 'test/repo',
+      CNB_TOKEN: 'test-token', UPSTREAM_OVERRIDE: `http://127.0.0.1:${MOCK_PORT}`,
+      PROXY_MODELS_STATE: join(tmpdir(), `cnb2api-optin-${process.pid}.json`),
+      CNB2API_ALLOW_THINKING: '1',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  try {
+    await waitPort(OPTIN_PORT);
+    const r = await fetch(`http://127.0.0.1:${OPTIN_PORT}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${KEY}` },
+      body: JSON.stringify({
+        model: 'mock-model',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: true,
+        max_tokens: 60000,
+        reasoning_effort: 'high',
+        thinking: { type: 'enabled' },
+      }),
+    });
+    assert.equal(r.status, 200);
+    await r.text();
+    assert.equal(upstreamState.lastBody.reasoning_effort, 'high', 'opt-in must forward reasoning_effort');
+    assert.deepEqual(upstreamState.lastBody.thinking, { type: 'enabled' }, 'opt-in must forward thinking');
+    // 非思考字段仍原样透传
+    assert.equal(upstreamState.lastBody.model, 'mock-model');
+    assert.equal(upstreamState.lastBody.max_tokens, 60000);
+  } finally {
+    optIn.kill('SIGTERM');
+  }
+});

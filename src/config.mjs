@@ -21,6 +21,11 @@ export const config = {
   idleTimeoutMs: Number(process.env.PROXY_IDLE_TIMEOUT_MS || 300_000),        // per-stream idle cap (reset each chunk)
   authFailWindowMs: 60_000,
   authFailMax: 10,
+  // 放行客户端的思考开关（reasoning_effort / reasoning / enable_thinking /
+  // thinking）到上游 thinking 变体，而不是在出站时剥除。默认关闭：剥除是安全
+  // 默认值，理由见 src/proxy.mjs 的剥除说明。开启者必须自行保证 max_tokens
+  // 足够大——thinking 变体把推理阶段也计入该预算。
+  allowThinking: process.env.CNB2API_ALLOW_THINKING === '1',
   upstreamUrl: '',
 };
 
