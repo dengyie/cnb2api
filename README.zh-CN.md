@@ -179,7 +179,9 @@ npm run quota
 | `PROXY_BLOCK_RETRY` | `1` | 11128 阶梯式自动重试：被拒后依次尝试折叠 System 提示词及文本打散。 |
 | `PROXY_ENSURE_SYSTEM` | `1` | 自动将 `developer` 角色规范化为 `system` 并将中途提示词前置。 |
 | `PROXY_SYNTHETIC_SYSTEM` | `0` | 当请求缺少 System 角色时补充中性占位 System（默认关闭）。 |
-| `CNB2API_ALLOW_THINKING` | `0` | 设为 `1` 时将思考开关透传至上游变体（需调用方提供足够大的 Token 预算）。 |
+| `CNB2API_ALLOW_THINKING` | `0` | 设为 `1` 时将思考开关透传至上游变体，并自动抬升 `max_tokens` 防止推理吃光正文预算。 |
+| `CNB2API_THINKING_MIN_TOKENS` | `32768` | 透传思考时自动抬升 `max_tokens` 的下限。 |
+| `CNB2API_THINKING_MAX_TOKENS` | `64000` | 自动抬升的上限；客户端自己给得更大的预算不会被压低。 |
 | `REGISTER_URL` | 无（可选） | 动态域名自注册中继端点地址（`/ops/register`）。 |
 | `REG_TOKEN` | 无（可选） | 动态域名自注册通信鉴权凭据。 |
 
@@ -195,6 +197,9 @@ npm run quota
 
 **出站中性化机制如何化解 11128 错误？**  
 上游网关对 `system` 与 `assistant` 提示词内容执行严格的客户端指纹模糊匹配。CNB2API 通过三层机制有效应对：首先对已知特征短语执行等价改写并对特定品牌词插入零宽空格；其次将新型 `developer` 角色平滑归一为 `system`；最后在遭遇 HTTP 400/11128 拦截时，触发自动重试阶梯将系统提示词折叠至用户首条消息。
+
+**为什么模型不思考 / 看不到推理内容？**  
+思考开关（`reasoning_effort`、`thinking`、`enable_thinking` 等）默认会被剥除：上游 thinking 变体把推理阶段也计入 `max_tokens`，预算小时推理吃光配额、正文一个字都出不来（`finish_reason=length`、content 为空）。设置 `CNB2API_ALLOW_THINKING=1` 即可放行，代理会同时把 `max_tokens` 抬到 `CNB2API_THINKING_MIN_TOKENS`（默认 32k），并把 Anthropic 的 `thinking.budget_tokens` 折进该预算；客户端自己给得更大的预算原样保留。不带思考开关的请求不受影响。
 
 **使用本项目是否违反平台规范？**  
 完全合规。CNB2API 完全运行在用户自有合规工作区中，调用公开的平台端点，使用平台签发的流水线临时凭证，严格在组织已分配的合法配额内运行。

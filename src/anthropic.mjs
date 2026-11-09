@@ -36,8 +36,13 @@ export class ProtocolError extends Error {
 // 让 /v1/messages 的单元测试直接覆盖到；proxy.mjs 在 fetch 前还会再跑一遍
 // （幂等），保证 /v1/chat/completions 透传路径同样被覆盖。
 import { neutralize } from './neutralize.mjs';
+import { ensureThinkingBudget, effortForBudget, DEFAULT_THINKING_MIN_TOKENS, DEFAULT_THINKING_MAX_TOKENS } from './thinking.mjs';
 
-export function fromAnthropicRequest(body, { allowThinking = false } = {}) {
+export function fromAnthropicRequest(body, {
+  allowThinking = false,
+  thinkingMinTokens = DEFAULT_THINKING_MIN_TOKENS,
+  thinkingMaxTokens = DEFAULT_THINKING_MAX_TOKENS,
+} = {}) {
   if (!body || typeof body !== 'object') throw new ProtocolError('request body must be a JSON object');
   if (!Array.isArray(body.messages) || body.messages.length === 0) {
     throw new ProtocolError('messages: must be a non-empty array');
@@ -93,13 +98,24 @@ export function fromAnthropicRequest(body, { allowThinking = false } = {}) {
 
   // 思考开关（默认丢弃，见下）：Anthropic 用 thinking:{type,budget_tokens} 表达，
   // 上游 OpenAI 端点认 thinking:{type:enabled} + reasoning_effort。仅当部署显式开启
-  // CNB2API_ALLOW_THINKING=1 时映射透传；默认丢弃，理由与 proxy.mjs 出站剥除同一
-  // 教训——thinking 变体把推理计入 max_tokens，预算不足时 content 永不产出。
-  // budget_tokens 不映射：上游没有对应字段，强度用 reasoning_effort 表达。
+  // CNB2API_ALLOW_THINKING=1 时映射透传；默认丢弃，理由见 src/thinking.mjs。
+  // budget_tokens 上游没有对应字段，只能折进 max_tokens：thinking 变体的推理与
+  // 正文共享同一个预算，不叠加的话推理会吃光预算、正文为空（2026-10-04 生产抓帧）。
   if (allowThinking && body.thinking && typeof body.thinking === 'object'
     && body.thinking.type === 'enabled') {
     out.thinking = { type: 'enabled' };
     if (typeof body.thinking.effort === 'string') out.reasoning_effort = body.thinking.effort;
+    // 上游只认 reasoning_effort：只有 budget_tokens 时按档位折算强度，
+    // 否则 thinking:{type:enabled} 发过去只是叫了个名字，不切变体
+    else if (typeof body.reasoning_effort !== 'string') {
+      out.reasoning_effort = effortForBudget(body.thinking.budget_tokens);
+    }
+    const budget = Number(body.thinking.budget_tokens);
+    Object.assign(out, ensureThinkingBudget(out, {
+      minTokens: thinkingMinTokens,
+      maxTokens: thinkingMaxTokens,
+      extraTokens: Number.isFinite(budget) && budget > 0 ? budget : 0,
+    }));
   }
   return out;
 }

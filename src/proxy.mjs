@@ -5,28 +5,17 @@ import { aggregate } from './sse.mjs';
 import { record as recordUsage } from './usage.mjs';
 import { observe as observeModel } from './models.mjs';
 import { prepareOutbound, foldSystemIntoUser, obfuscateNonUser } from './neutralize.mjs';
+import { applyThinkingPolicy } from './thinking.mjs';
 
-// 出站请求剥除思考开关：带 reasoning_effort 等思考参数时上游路由到 thinking 变体，
-// 而该变体把推理阶段也计入 max_tokens——推理吃满预算后 finish_reason=length、
-// content 全空（答案永不生成，真机实测 2048/8192 token 必现）。上游无正确开关可配，
-// 出站统一剥除、锁定非 thinking 变体（与 /v1/messages 请求侧丢弃 thinking 块同一策略）。
-// 表驱动：上游若引入新的思考开关命名，往这张表加一项即可。
-//
-// 逃生口：剥除是"安全默认值"，不是"唯一正确策略"。它把客户端永久锁死在非 thinking
-// 变体上，思考能力整体消失——2026-10-08 同步本提交后，某下游的 CNB 侧 reasoning 从
-// 每天数百万字符直接归零，且试遍参数拼写（reasoningEffort / enableThinking /
-// chat_template_kwargs / extra_body / thinking_budget）都无法再触达 thinking 变体。
-// 会翻车的组合其实只是"思考开关 + 过小的 max_tokens"；max_tokens 给够时推理与正文会
-// 依次产出（2026-09-18/09-20 真实流量在 max_tokens=60000 下完全正常）。
-// 因此：默认仍剥除，工作区显式设 CNB2API_ALLOW_THINKING=1 时放行，由客户端自负预算。
-const REASONING_TRIGGERS = ['reasoning_effort', 'reasoning', 'enable_thinking', 'thinking'];
-
-function stripReasoningTriggers(payload) {
-  if (config.allowThinking) return payload;
-  if (!REASONING_TRIGGERS.some((k) => k in payload)) return payload;
-  const out = { ...payload };
-  for (const k of REASONING_TRIGGERS) delete out[k];
-  return out;
+// 出站思考开关策略见 src/thinking.mjs：默认剥除（锁定非 thinking 变体）；
+// 工作区显式设 CNB2API_ALLOW_THINKING=1 时放行，并自动把 max_tokens 抬到
+// 安全下限，避免上游 thinking 变体把推理吃满预算后正文永不产出。
+function outboundThinking(payload) {
+  return applyThinkingPolicy(payload, {
+    allowThinking: config.allowThinking,
+    minTokens: config.thinkingMinTokens,
+    maxTokens: config.thinkingMaxTokens,
+  });
 }
 
 export async function forward({ reqId, payload, wantStream, res, transform }) {
@@ -70,7 +59,7 @@ export async function forward({ reqId, payload, wantStream, res, transform }) {
       up = await fetch(config.upstreamUrl, {
         method: 'POST',
         headers: { Authorization: `Bearer ${config.upstreamToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...stripReasoningTriggers(body), stream: true }),
+        body: JSON.stringify({ ...outboundThinking(body), stream: true }),
         signal: ac.signal,
       });
     } catch (e) {
@@ -132,6 +121,10 @@ export async function forward({ reqId, payload, wantStream, res, transform }) {
     let usage = null;      // 流式路径从尾部 chunk 提取 usage（OpenAI 约定：最后一个 data 带 usage）
     let ok = false;        // 流正常走完（未中途 abort/停滞）
     let clientGone = false; // 客户端主动断开（正常行为，与上游流故障区分：不计 errors）
+    // 思考变体退化形态检测：只有 reasoning、没有正文且 finish_reason=length
+    let sawReasoning = false;
+    let sawContent = false;
+    let upstreamFinish = null;
     // 行处理：usage 提取（所有路径）+ 协议转换（挂 transform 时逐行喂流式状态机）
     const handleLine = (line) => {
       const trimmed = line.trim();
@@ -142,6 +135,12 @@ export async function forward({ reqId, payload, wantStream, res, transform }) {
       try { j = JSON.parse(data); } catch { return; /* 心跳/非 JSON 行忽略 */ }
       if (j.usage) usage = j.usage;
       if (j.model) observeModel(j.model); // 嗅探上游真实模型名（无 list 接口，只能从响应读）
+      const choice = j.choices?.[0];
+      if (choice) {
+        if (choice.finish_reason) upstreamFinish = choice.finish_reason;
+        if (choice.delta?.reasoning_content) sawReasoning = true;
+        if (choice.delta?.content) sawContent = true;
+      }
       if (transform) writeEvents(transform.stream.feed(j));
     };
     const parseLines = (lines) => {
@@ -198,6 +197,13 @@ export async function forward({ reqId, payload, wantStream, res, transform }) {
     } finally {
       clearTimeout(idle);
     }
+    // 上游 thinking 变体的退化形态：推理把 max_tokens 吃光，正文一个字都没出。
+    // 客户端只拿到思考块/空 content，日志给出可操作的修复方向（不是协议错误，不改响应）。
+    if (upstreamFinish === 'length' && sawReasoning && !sawContent) {
+      log.warn(reqId, 'thinking exhausted max_tokens, no answer content', {
+        hint: 'client max_tokens too small; raise it or CNB2API_THINKING_MIN_TOKENS',
+      });
+    }
     recordUsage({
       prompt: usage?.prompt_tokens || 0,
       completion: usage?.completion_tokens || 0,
@@ -222,6 +228,13 @@ export async function forward({ reqId, payload, wantStream, res, transform }) {
   clearTimeout(idleTimer);
   const body = aggregate(text);
   if (body.model) observeModel(body.model); // 嗅探上游真实模型名（非流式聚合结果里的 model）
+  // 非流式同一条退化形态：只有 reasoning_content、没有 content、finish_reason=length
+  const agg = body.choices?.[0];
+  if (agg?.finish_reason === 'length' && agg.message?.reasoning_content && !agg.message?.content) {
+    log.warn(reqId, 'thinking exhausted max_tokens, no answer content', {
+      hint: 'client max_tokens too small; raise it or CNB2API_THINKING_MIN_TOKENS',
+    });
+  }
   recordUsage({ prompt: body.usage.prompt_tokens || 0, completion: body.usage.completion_tokens || 0 });
   log.info(reqId, 'chat done', { ms: Date.now() - started, out: body.usage.completion_tokens });
   if (transform) return { handled: false, status: 200, body: transform.response(body) };
