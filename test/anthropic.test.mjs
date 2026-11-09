@@ -236,7 +236,8 @@ test('请求转换：thinking 请求参数不泄漏出站（真机教训：触�
 test('请求转换：显式开启 CNB2API_ALLOW_THINKING 后 thinking 映射透传（逃生口）', () => {
   // 默认丢弃是安全默认值，但会把客户端永久锁死在非 thinking 变体上。部署显式
   // opt-in 后按上游 OpenAI 端点认识的形状映射：thinking:{type:enabled} +
-  // reasoning_effort。budget_tokens 不映射（上游无对应字段）。
+  // reasoning_effort。budget_tokens 上游没有对应字段，折进 max_tokens：
+  // 推理与正文共享同一个预算，叠加后正文才有空间（60000 + 2048 = 62048）。
   const out = fromAnthropicRequest({
     model: 'claude-sonnet-4-5',
     max_tokens: 60000,
@@ -245,9 +246,23 @@ test('请求转换：显式开启 CNB2API_ALLOW_THINKING 后 thinking 映射透�
   }, { allowThinking: true });
   assert.deepEqual(out.thinking, { type: 'enabled' });
   assert.equal(out.reasoning_effort, 'high');
-  // 其余字段照旧
-  assert.equal(out.max_tokens, 60000);
+  assert.equal(out.max_tokens, 62048);
   assert.equal(out.messages.length, 1);
+
+  // 客户端 max_tokens 很小（4096）时抬到安全下限：推理后仍有正文空间
+  const small = fromAnthropicRequest({
+    max_tokens: 4096,
+    thinking: { type: 'enabled', budget_tokens: 2048 },
+    messages: [{ role: 'user', content: 'hi' }],
+  }, { allowThinking: true });
+  assert.equal(small.max_tokens, 32768);
+  // 叠加后的值不超过自动抬升上限（客户端自己给的大预算不压低）
+  const capped = fromAnthropicRequest({
+    max_tokens: 60000,
+    thinking: { type: 'enabled', budget_tokens: 60000 },
+    messages: [{ role: 'user', content: 'hi' }],
+  }, { allowThinking: true });
+  assert.equal(capped.max_tokens, 64000);
 
   // thinking:disabled 不该被映射成 enabled —— 客户端明确要关就必须关
   const disabled = fromAnthropicRequest({

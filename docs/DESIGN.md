@@ -25,6 +25,7 @@ src/
 ├── sse.mjs      SSE event parsing + non-stream aggregation
 ├── models.mjs   passive model-name registry (sniffed from responses, disk-persisted)
 ├── neutralize.mjs  outbound neutralizer: fingerprint rewrites + fallback shapes
+├── thinking.mjs thinking-toggle policy: strip by default, budgeted pass-through on opt-in
 ├── proxy.mjs    upstream forwarding: AbortSignal timeout + two-way cancel
 ├── server.mjs   http server + routing (/health, /v1/models, /v1/chat/completions)
 └── log.mjs      structured single-line JSON logs, correlated by reqId
@@ -41,8 +42,10 @@ client ──POST /v1/chat/completions──▶ server.mjs
   ① OPTIONS → 204 (CORS: Authorization/Content-Type only)
   ② auth: Bearer PROXY_KEY (required env, no default) → fail count → over cap = 429
   ③ read body: 4 MiB cap (over = 413), invalid JSON = 400
-  ④ proxy.mjs: neutralize outbound → fetch upstream (forced stream:true)
+  ④ proxy.mjs: neutralize outbound → thinking policy → fetch upstream (forced stream:true)
       · prepareOutbound(): fingerprint rewrites, developer→system, system hoist
+      · thinking policy: strip toggles by default; with ALLOW_THINKING=1 keep
+        them and raise max_tokens to a safe floor (see Thinking toggles)
       · on 400/11128 only: retry fold-system → obfuscate (see Outbound neutralizer)
       · connect timeout 15s (AbortSignal.timeout)
       · client res 'close' → abort upstream → stop burning credits
@@ -112,6 +115,29 @@ ladder only when the upstream actually returns 400/11128:
 Rejected requests generate nothing, so retries cost no credits. Any non-11128
 400 is passed through without retrying. `PROXY_BLOCK_RETRY=0` disables the
 ladder; `PROXY_NEUTRALIZE=0` disables the rewrite layer.
+
+### Thinking toggles (issue #9)
+
+`reasoning_effort` / `reasoning` / `enable_thinking` / `thinking` (and the
+Anthropic `thinking:{type,budget_tokens}` form) are stripped from the outbound
+body by default, locking the non-thinking variant. This is a budget workaround,
+not a feature decision: the upstream thinking variant bills its reasoning phase
+against `max_tokens`. With a small budget the reasoning consumes everything,
+`finish_reason` becomes `length`, and `content` is empty — the 2026-10-04
+production capture showed `{reasoning_only: 1024, empty: 2}`.
+
+`CNB2API_ALLOW_THINKING=1` forwards the toggles and makes the pass-through safe:
+`proxy.mjs` (via `thinking.mjs`) raises `max_tokens` / `max_completion_tokens`
+to `CNB2API_THINKING_MIN_TOKENS` (32k, 60k verified live) and caps the automatic
+raise at `CNB2API_THINKING_MAX_TOKENS` (64k); a larger client budget is never
+lowered. The Anthropic converter folds `budget_tokens` into `max_tokens`
+(upstream has no equivalent field), so answer length survives reasoning.
+Explicit "off" forms (`reasoning_effort: "none"`, `thinking:{type:"disabled"}`)
+are never treated as thinking. Request-side `thinking` blocks in history are
+still dropped — the upstream has no way to consume them.
+
+Both stacks log a hint when a response is reasoning-only with
+`finish_reason=length` (the symptom that triggered the issue).
 
 ## 4. Self-healing address (keepalive)
 

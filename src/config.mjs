@@ -1,5 +1,10 @@
 // Central env loading + fail-fast validation.
 // The proxy refuses to start with a missing/weak key instead of running exposed.
+const positiveInt = (raw, fallback) => {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+};
+
 export const config = {
   port: Number(process.env.PROXY_PORT || 9001),
   // CNB repo slug (org/repo). CNB_REPO_SLUG or CNB_BUILD_REPO are built-in
@@ -41,9 +46,14 @@ export const config = {
   authFailMax: 10,
   // 放行客户端的思考开关（reasoning_effort / reasoning / enable_thinking /
   // thinking）到上游 thinking 变体，而不是在出站时剥除。默认关闭：剥除是安全
-  // 默认值，理由见 src/proxy.mjs 的剥除说明。开启者必须自行保证 max_tokens
-  // 足够大——thinking 变体把推理阶段也计入该预算。
+  // 默认值，理由见 src/thinking.mjs。开启后代理会自动兜底输出预算——
+  // thinking 变体把推理阶段也计入 max_tokens，预算过小时正文永不产出。
   allowThinking: process.env.CNB2API_ALLOW_THINKING === '1',
+  // 放行思考时自动抬升 max_tokens 的下限/上限（tokens）。下限要能同时容下
+  // 推理与正文（32k 是安全起点，60k 已真机验证）；上限只约束自动抬升，
+  // 客户端自己给的更大预算不会被压低。
+  thinkingMinTokens: positiveInt(process.env.CNB2API_THINKING_MIN_TOKENS, 32_768),
+  thinkingMaxTokens: positiveInt(process.env.CNB2API_THINKING_MAX_TOKENS, 64_000),
   upstreamUrl: '',
 };
 

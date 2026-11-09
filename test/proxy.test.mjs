@@ -637,9 +637,36 @@ test('CNB2API_ALLOW_THINKING=1 → 思考开关透传到上游（逃生口）', 
     await r.text();
     assert.equal(upstreamState.lastBody.reasoning_effort, 'high', 'opt-in must forward reasoning_effort');
     assert.deepEqual(upstreamState.lastBody.thinking, { type: 'enabled' }, 'opt-in must forward thinking');
-    // 非思考字段仍原样透传
+    // 非思考字段仍原样透传；预算已够大 → 不抬升（只抬不压）
     assert.equal(upstreamState.lastBody.model, 'mock-model');
     assert.equal(upstreamState.lastBody.max_tokens, 60000);
+
+    // 客户端只给小预算（issue #9 的复现路径）→ 代理自动抬到安全下限，
+    // 否则 thinking 变体推理吃满 max_tokens、正文永不产出
+    const small = await fetch(`http://127.0.0.1:${OPTIN_PORT}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${KEY}` },
+      body: JSON.stringify({
+        model: 'mock-model',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: false,
+        max_tokens: 4096,
+        reasoning_effort: 'high',
+      }),
+    });
+    assert.equal(small.status, 200);
+    await small.json();
+    assert.equal(upstreamState.lastBody.max_tokens, 32768, 'small budget must be raised to the thinking floor');
+
+    // 没有思考开关的请求不受 allow-thinking 影响
+    const plain = await fetch(`http://127.0.0.1:${OPTIN_PORT}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${KEY}` },
+      body: JSON.stringify({ model: 'mock-model', messages: [], stream: false, max_tokens: 1024 }),
+    });
+    assert.equal(plain.status, 200);
+    await plain.json();
+    assert.equal(upstreamState.lastBody.max_tokens, 1024);
   } finally {
     optIn.kill('SIGTERM');
   }

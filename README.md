@@ -179,7 +179,9 @@ npm run quota
 | `PROXY_BLOCK_RETRY` | `1` | 11128 fallback ladder: folds system prompts and word-obfuscates on rejection. |
 | `PROXY_ENSURE_SYSTEM` | `1` | Normalizes `developer` role to `system`. |
 | `PROXY_SYNTHETIC_SYSTEM` | `0` | Prepends synthetic system prompt when absent. |
-| `CNB2API_ALLOW_THINKING` | `0` | Set to `1` to forward thinking toggles upstream. |
+| `CNB2API_ALLOW_THINKING` | `0` | Set to `1` to forward thinking toggles upstream; the proxy auto-raises `max_tokens` so reasoning cannot starve the answer. |
+| `CNB2API_THINKING_MIN_TOKENS` | `32768` | Floor for the automatic `max_tokens` raise when thinking is forwarded. |
+| `CNB2API_THINKING_MAX_TOKENS` | `64000` | Ceiling for the automatic raise; larger client-supplied budgets are kept. |
 | `REGISTER_URL` | None (Optional) | Target relay endpoint (`/ops/register`) for dynamic registration. |
 | `REG_TOKEN` | None (Optional) | Shared secret token authorizing registration calls. |
 
@@ -195,6 +197,9 @@ Yes. In streaming mode, partial `input_json_delta` chunks are assembled into com
 
 **How does the Outbound Neutralizer mitigate 11128 errors?**  
 Upstream gateways enforce client-fingerprint moderation on `system` and `assistant` texts. CNB2API mitigates this via a three-layer pipeline: ① rewriting signature phrases and adding zero-width spaces to identity tokens; ② normalizing `developer` roles to `system`; ③ executing an automated retry ladder folding system prompts into user messages on HTTP 400/11128.
+
+**Why does the model not think / reasoning never appear?**  
+Thinking toggles (`reasoning_effort`, `thinking`, `enable_thinking`, …) are stripped by default. On the upstream thinking variant the reasoning phase is billed against `max_tokens`; with a small budget it consumes everything and the answer never starts (`finish_reason=length`, empty content). Set `CNB2API_ALLOW_THINKING=1` to forward the toggles — the proxy then raises `max_tokens` to `CNB2API_THINKING_MIN_TOKENS` (32k) and folds Anthropic `thinking.budget_tokens` into it, while a larger client budget is kept as-is. Requests without a toggle are unaffected.
 
 **Does this service violate CNB platform policies?**  
 No. CNB2API runs within your own authorized cloud workspace, calls documented platform completion APIs using platform-issued ephemeral tokens, and strictly consumes your own allocated organization quotas.
