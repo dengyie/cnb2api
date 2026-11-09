@@ -14,6 +14,20 @@ export const REASONING_TRIGGERS = ['reasoning_effort', 'reasoning', 'enable_thin
 // 上限只约束"自动抬升"的值，客户端自己给的更大预算不会被压低。
 export const DEFAULT_THINKING_MIN_TOKENS = 32_768;
 export const DEFAULT_THINKING_MAX_TOKENS = 64_000;
+// 上游只认 reasoning_effort 这一个强度字段；thinking / enable_thinking 单独发
+// 不会路由到 thinking 变体（2026-11-09 线上实测：三种命名单独发 reasoningChars=0，
+// 只有 reasoning_effort 非 none 时上游才产出 reasoning_content）。
+export const DEFAULT_THINKING_EFFORT = 'medium';
+
+// Anthropic 只有 thinking.budget_tokens、没有强度字段。上游要 reasoning_effort
+// 才会切 thinking 变体，所以按预算档位折算（预算本身另有 max_tokens 叠加）。
+export function effortForBudget(budgetTokens, fallback = DEFAULT_THINKING_EFFORT) {
+  const n = Number(budgetTokens);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  if (n <= 4_096) return 'low';
+  if (n <= 16_384) return 'medium';
+  return 'high';
+}
 
 // 明确表达"要思考"才算触发：false / 'none' / {type:'disabled'} 是客户端明确关闭，
 // 不能因为字段存在就误判成开启。
@@ -41,6 +55,15 @@ export function thinkingRequested(payload) {
     return true;
   }
   return false;
+}
+
+// 出站补齐强度字段：客户端只发 thinking / enable_thinking / reasoning 时上游不会
+// 切 thinking 变体，这里补一个合法的 reasoning_effort（已显式给了就尊重原值，
+// 包括 'none' 这种明确关闭）。
+export function ensureThinkingEffort(payload, defaultEffort = DEFAULT_THINKING_EFFORT) {
+  if (!thinkingRequested(payload)) return payload;
+  if (typeof payload.reasoning_effort === 'string') return payload;
+  return { ...payload, reasoning_effort: defaultEffort };
 }
 
 // 出站删除所有思考开关（安全默认值）：锁定非 thinking 变体。
@@ -84,5 +107,6 @@ export function applyThinkingPolicy(payload, {
 } = {}) {
   if (!thinkingRequested(payload)) return payload;
   if (!allowThinking) return stripThinking(payload);
-  return ensureThinkingBudget(payload, { minTokens, maxTokens, extraTokens });
+  const withEffort = ensureThinkingEffort(payload);
+  return ensureThinkingBudget(withEffort, { minTokens, maxTokens, extraTokens });
 }

@@ -132,9 +132,14 @@ to `CNB2API_THINKING_MIN_TOKENS` (32k, 60k verified live) and caps the automatic
 raise at `CNB2API_THINKING_MAX_TOKENS` (64k); a larger client budget is never
 lowered. The Anthropic converter folds `budget_tokens` into `max_tokens`
 (upstream has no equivalent field), so answer length survives reasoning.
-Explicit "off" forms (`reasoning_effort: "none"`, `thinking:{type:"disabled"}`)
-are never treated as thinking. Request-side `thinking` blocks in history are
-still dropped — the upstream has no way to consume them.
+Because the upstream only routes on `reasoning_effort` — `thinking` /
+`enable_thinking` / `reasoning` alone are inert (verified live 2026-11-09) —
+the policy fills `reasoning_effort` (`medium`) when a toggle-only request lacks
+it, and the Anthropic converter derives the level from `budget_tokens`
+(≤4k low, ≤16k medium, above high). Explicit "off" forms
+(`reasoning_effort: "none"`, `thinking:{type:"disabled"}`) are never treated as
+thinking. Request-side `thinking` blocks in history are still dropped — the
+upstream has no way to consume them.
 
 Both stacks log a hint when a response is reasoning-only with
 `finish_reason=length` (the symptom that triggered the issue).

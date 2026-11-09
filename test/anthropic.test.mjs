@@ -256,6 +256,26 @@ test('请求转换：显式开启 CNB2API_ALLOW_THINKING 后 thinking 映射透�
     messages: [{ role: 'user', content: 'hi' }],
   }, { allowThinking: true });
   assert.equal(small.max_tokens, 32768);
+  // 只有 budget_tokens 没有 effort（真实 Claude Code 形态）→ 按档位折算强度：
+  // 上游只认 reasoning_effort，缺了它 thinking:{type:enabled} 不切变体
+  // （2026-11-09 线上实测），2048 → low。
+  assert.equal(small.reasoning_effort, 'low');
+  // 大预算 → high
+  const big = fromAnthropicRequest({
+    max_tokens: 4096,
+    thinking: { type: 'enabled', budget_tokens: 31999 },
+    messages: [{ role: 'user', content: 'hi' }],
+  }, { allowThinking: true });
+  assert.equal(big.reasoning_effort, 'high');
+  assert.equal(big.max_tokens, 36095);
+  // 无效预算 → medium 兜底
+  const badBudget = fromAnthropicRequest({
+    max_tokens: 4096,
+    thinking: { type: 'enabled', budget_tokens: 'many' },
+    messages: [{ role: 'user', content: 'hi' }],
+  }, { allowThinking: true });
+  assert.equal(badBudget.reasoning_effort, 'medium');
+  assert.equal(badBudget.max_tokens, 32768);
   // 叠加后的值不超过自动抬升上限（客户端自己给的大预算不压低）
   const capped = fromAnthropicRequest({
     max_tokens: 60000,

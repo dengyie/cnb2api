@@ -36,7 +36,7 @@ export class ProtocolError extends Error {
 // 让 /v1/messages 的单元测试直接覆盖到；proxy.mjs 在 fetch 前还会再跑一遍
 // （幂等），保证 /v1/chat/completions 透传路径同样被覆盖。
 import { neutralize } from './neutralize.mjs';
-import { ensureThinkingBudget, DEFAULT_THINKING_MIN_TOKENS, DEFAULT_THINKING_MAX_TOKENS } from './thinking.mjs';
+import { ensureThinkingBudget, effortForBudget, DEFAULT_THINKING_MIN_TOKENS, DEFAULT_THINKING_MAX_TOKENS } from './thinking.mjs';
 
 export function fromAnthropicRequest(body, {
   allowThinking = false,
@@ -105,6 +105,11 @@ export function fromAnthropicRequest(body, {
     && body.thinking.type === 'enabled') {
     out.thinking = { type: 'enabled' };
     if (typeof body.thinking.effort === 'string') out.reasoning_effort = body.thinking.effort;
+    // 上游只认 reasoning_effort：只有 budget_tokens 时按档位折算强度，
+    // 否则 thinking:{type:enabled} 发过去只是叫了个名字，不切变体
+    else if (typeof body.reasoning_effort !== 'string') {
+      out.reasoning_effort = effortForBudget(body.thinking.budget_tokens);
+    }
     const budget = Number(body.thinking.budget_tokens);
     Object.assign(out, ensureThinkingBudget(out, {
       minTokens: thinkingMinTokens,
